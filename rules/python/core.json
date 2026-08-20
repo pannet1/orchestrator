@@ -1,0 +1,106 @@
+{
+  "lang": "python",
+  "checks": [
+    {
+      "id": "comment",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "^\\s*#",
+      "exclude": ["noqa", "# -*-", "#!/"],
+      "message": "comments not allowed"
+    },
+    {
+      "id": "no-print",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "print\\(",
+      "exclude": ["logger"],
+      "message": "use shared logger, not print()"
+    },
+    {
+      "id": "no-emoji",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "[\\U0001F600-\\U0010FFFF]",
+      "message": "emoji found"
+    },
+    {
+      "id": "no-flask-sqlalchemy",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "^(?:from\\s+(?:flask|sqlalchemy)\\s+import|import\\s+(?:flask|sqlalchemy))",
+      "message": "forbidden import — use FastAPI, not Flask/SQLAlchemy"
+    },
+    {
+      "id": "no-logging-getlogger",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "logging\\.getLogger",
+      "message": "use `from shared.logger import logging_func` instead of logging.getLogger(__name__)"
+    },
+    {
+      "id": "return-types",
+      "group": "standards",
+      "kind": "py-ast",
+      "check": "return_annotations",
+      "message": "missing return type"
+    },
+    {
+      "id": "bare-none",
+      "group": "standards",
+      "kind": "py-ast",
+      "check": "bare_none",
+      "message": "param has bare Optional-style = None"
+    },
+    {
+      "id": "unused-imports",
+      "group": "standards",
+      "kind": "py-ast",
+      "check": "unused_imports",
+      "message": "unused import"
+    },
+    {
+      "id": "shared-logger",
+      "group": "standards",
+      "kind": "py-ast",
+      "check": "shared_logger_import",
+      "except": ["__init__.py", "Tests.py"],
+      "skip": {"name": ["Schema.py"], "contains": ["BaseModel"]},
+      "message": "missing shared logger import"
+    },
+    {
+      "id": "schema-basemodel",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["Schema.py"],
+      "contains": ["BaseModel"],
+      "message": "Schema.py must import and use pydantic.BaseModel"
+    },
+    {
+      "id": "handler-logger",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["Handler.py"],
+      "contains": ["logging_func"],
+      "message": "Handler.py must have a module-level logger"
+    },
+    {
+      "id": "tests-presence",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["Tests.py"],
+      "contains": ["def test_"],
+      "message": "Tests.py must contain test functions"
+    },
+    {
+      "id": "balanced",
+      "group": "structure",
+      "kind": "balanced",
+      "pairs": [
+        {"open": "(", "close": ")", "message": "Unbalanced parentheses: {open} open vs {close} close"},
+        {"token": "'''", "mode": "odd", "message": "Unbalanced triple-single-quotes"},
+        {"token": "\"\"\"", "mode": "odd", "message": "Unbalanced triple-double-quotes"}
+      ]
+    }
+  ]
+}

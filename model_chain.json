@@ -1,0 +1,8 @@
+[
+  "openrouter/poolside/laguna-s-2.1:free",
+  "openrouter/cohere/north-mini-code:free",
+  "opencode/nemotron-3-ultra-free",
+  "opencode/deepseek-v4-flash-free",
+  "opencode/laguna-s-2.1-free",
+  "llama-swap/qwen2.5-coder-7b-instruct"
+]
