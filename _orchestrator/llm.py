@@ -326,7 +326,7 @@ class OmpStreamFormatter:
 
 
 def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 300, max_attempts: int = 6) -> str | None:
-    """One-shot completion routed through the oh-my-pi harness (`omp -p --mode json`).
+    """One-shot completion routed through the oh-my-pi harness (`pi -p --mode json`).
 
     Mirrors the interactive TUI session as closely as possible: runs in the
     repo root, tools enabled (auto-approved, non-interactive), repo rules and
@@ -346,14 +346,15 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
     """
     omp = _pi_binary()
     if omp is None:
-        print("[LLM] omp binary not found on PATH — no oh-my-pi model transport.", file=sys.stderr)
+        print("[LLM] pi binary not found on PATH — no oh-my-pi model transport.", file=sys.stderr)
         return None
 
+    # Use valid pi options; --auto-approve/--cwd/--max-time removed as they
+    # are not supported in this pi version (0.84.2). CWD defaults to repo root,
+    # timeout is handled by the model chain max_attempts.
     base_cmd = [
         omp, "-p", prompt, "--mode", "json",
-        "--auto-approve",
-        "--cwd", str(REPO_ROOT),
-        "--max-time", str(timeout),
+        "--model", model,
     ]
     if system:
         base_cmd += ["--system-prompt", system]
