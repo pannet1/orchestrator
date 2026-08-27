@@ -1,8 +1,8 @@
 # Orchestrator (`orch.py`)
 
-The orchestrator is a single CLI entry point, `orch.py` (repo root). Projects get
-a `.agents` symlink to this directory, so the tool is invoked from inside a
-target project as:
+The orchestrator is a single CLI entry point, `agents/orch.py` (this repo's
+`agents/` dir). Projects get a `.agents` symlink to this repo's `agents/` dir,
+so the tool is invoked from inside a target project as:
 
 ```
 ./.agents/orch.py <action> <domain/Feature> [inline prompt] [options]
@@ -11,7 +11,7 @@ target project as:
 > `REPO_ROOT = Path.cwd()` — the orchestrator operates on **whatever directory
 > you run it from** (the target project), not on this repo. This repo is the
 > tool. `model_config.json`, `model_chain.json`, `personas/`, and `rules/` live
-> at this repo root (i.e. `.agents/...` from a target project).
+> in `agents/` (i.e. `.agents/...` from a target project).
 
 Every command routes through `_orchestrator/commands.py::dispatch()`. There are
 no other entry points — `runner.py` is an internal subprocess (never run by
@@ -38,7 +38,7 @@ git branch name.
 
 | Command | What it does | Next |
 |---|---|---|
-| `init <path>/<project-name>` | Create project folder + `.agents` symlink + its own independent git repo (`main` + initial commit + `.gitignore` excluding `.agents`). Does **not** create `.features.json`. Prompt arg ignored. | `new` |
+| `init <path>/<project-name>` | Create project folder + `.agents` symlink → `agents/`. Does **not** create `.features.json`. Prompt arg ignored. | `new` |
 | `new <domain/Feature> "prompt"` | Create feature branch, write spec.md (LLM-generated + spec-QA'd, template fallback), scaffold 4 files (`Schema.py`, `Handler.py`, `Controller.py`, `Tests.py`) + `__init__.py`, register in `.features.json`. | `do` |
 | `modify <domain/Feature> "prompt"` | Amend the feature's spec.md via LLM + append a `CONTRACT AMENDMENT` section; branch `modify/<Feature>`. Implicit mode (no target): uses the file currently open in nvim. Creates the feature dir if missing (no controller). | `do` |
 | `do [Feature]` | Run the backend agent: LLM implements spec.md, QA gates validate, pytest must pass; then stage + commit (`feat: <Name>`) + push the branch (**not merged**). On `main` with clean slate, auto-creates the feature branch. | `merge` |

@@ -11,19 +11,19 @@ A single-file CLI agent, `orch.py`, that decomposes feature work into a
 spec + code, then implements it with an LLM sub-agent and a git
 **branch-per-feature** workflow.
 
-- Entry point: `orch.py` (repo root).
-- All command logic lives in `_orchestrator/commands.py::dispatch()`.
+- Entry point: `agents/orch.py` (this repo's `agents/` dir).
+- All command logic lives in `agents/_orchestrator/commands.py::dispatch()`.
 - LLM work is done by shelling out to the **`pi` binary** (`pi -p --mode json`)
-  — not a direct API call. The model chain/config is in `model_chain.json` /
-  `model_config.json` at this repo root.
+  — not a direct API call. The model chain/config is in `agents/model_chain.json` /
+  `agents/model_config.json`.
 - Git is **never** shelled out by `commands.py` directly; every git operation
-  goes through `_orchestrator/git_ops.py`.
+  goes through `agents/_orchestrator/git_ops.py`.
 
 ## Mental model (read this before doing anything)
 
 ```
 target project/
-├── .agents -> /path/to/orchestrator/      <- symlink created by `init`
+├── .agents -> agents/      <- symlink created by `init` (this repo's agents/)
 ├── .features.json                         <- feature registry (created by `new`)
 └── features/                              <- default features_dir
     └── <domain>/<Feature>/
@@ -40,7 +40,7 @@ target project/
 - `REPO_ROOT = Path.cwd()`. The orchestrator operates on **whatever directory
   it is run from** (the target project), not on this repo. This repo is the
   *tool*; the project it orchestrates is the *target*.
-- `AGENTS_DIR` = this orchestrator repo root (parent of `_orchestrator/`).
+- `AGENTS_DIR` = this repo's `agents/` dir (the parent of `_orchestrator/`).
   `model_config.json`, `model_chain.json`, `personas/`, and `rules/` all live
   here and are shared by every target project.
 - There is **no `.features.json` in this repo** — it is created inside each
@@ -48,16 +48,10 @@ target project/
 
 ## Creating a new project (the `init` step)
 
-`init` **creates a folder + a `.agents` symlink + its own independent git
-repo**, then `cd`s into it. It does **not** create `.features.json` and
-**ignores any prompt**.
-
-- The target gets a fresh `.git` on `main` (initial `chore: initialize
-  project` commit) plus a `.gitignore` that excludes `.agents/` and Python
-  caches. This repo is **separate** from the orchestrator's `.git`.
-- `init` refuses if the target is *inside* an existing git repo (to avoid
-  nested repos); create the project outside this repo instead.
-- If the target is already a git repo, `init` leaves it untouched.
+`init` **creates a folder + a `.agents` symlink** (→ this repo's `agents/`)
+and `cd`s into it. It does **not** create `.features.json` and **ignores any
+prompt**. There is no per-project git repo — the new project lives inside
+this single git repository, so there is nothing to manage.
 
 ```bash
 # from anywhere
@@ -87,7 +81,7 @@ cd ~/projects/MyApp
 
 | Command | Target | What it does | Next |
 |---|---|---|---|
-| `init <path>/<name>` | required | Create folder + `.agents` symlink + independent git repo (`main` + initial commit + `.gitignore`). Ignores prompt. No `.features.json` yet. | `new` |
+| `init <path>/<name>` | required | Create folder + `.agents` symlink → `agents/`. Ignores prompt. No `.features.json` yet. | `new` |
 | `new <domain/Feature> "prompt"` | required | Create feature branch, write `spec.md` (LLM-generated, template fallback), scaffold the 4 code files + `__init__.py`, register in `.features.json`. | `do` |
 | `modify <domain/Feature> "prompt"` | optional | Amend an existing spec: rewrite spec via LLM, append a `CONTRACT AMENDMENT` section, branch `modify/<Feature>`. Implicit mode (no target) uses the file open in `nvim`. | `do` |
 | `do [Feature]` | optional | Run the backend sub-agent: implement `spec.md`, pass QA gates + `pytest`, then `feat:` commit + push the branch (**not merged**). Inferred from current branch if no name. | `merge` |
