@@ -73,5 +73,13 @@ def init_new_project(project_dir: Path) -> bool:
         dot_link.symlink_to(rel)
         print(f"  .agents/ -> {rel}  (this repo's agents/)")
 
+    # Pin the Python version for the target project. Constitution rule #1
+    # requires .python-version to exist; pin to 3.13 so uv never picks up a
+    # newer default (e.g. 3.14).
+    py_ver_file = project_dir / ".python-version"
+    if not py_ver_file.exists():
+        py_ver_file.write_text("3.13\n")
+        print("  .python-version -> 3.13")
+
     print(f"[Orchestrator] Project ready at {project_dir}")
     return True

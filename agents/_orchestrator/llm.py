@@ -19,11 +19,13 @@ MODEL_CHAIN_FILE = AGENTS_DIR / "model_chain.json"
 
 
 # Provider preference order. Free models are tried in this provider order;
-# the local llama-swap model is always the last resort (no network needed).
+# the opencode family is exhausted first (its free catalogue rotates often and
+# is the primary free provider), then openrouter, with the local llama-swap
+# model always the last resort (no network needed).
 PROVIDER_PREFERENCE: tuple[str, ...] = (
-    "openrouter",
     "opencode",
     "opencode-go",
+    "openrouter",
     "llama-swap",
 )
 

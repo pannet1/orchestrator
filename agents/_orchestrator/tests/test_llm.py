@@ -120,8 +120,8 @@ class TestLiveDiscovery:
         with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
                 patch("subprocess.run", return_value=fake_result):
             free = free_model_ids(force=True)
-        # openrouter (preferred) before opencode
-        assert free.index("openrouter/cohere/north-mini-code:free") < free.index("opencode/nemotron-3-ultra-free")
+        # opencode (preferred) before openrouter
+        assert free.index("opencode/nemotron-3-ultra-free") < free.index("openrouter/cohere/north-mini-code:free")
         # local fallback always last
         assert free[-1] == LOCAL_FALLBACK
         # non-free models excluded
@@ -173,7 +173,7 @@ class TestModelChain:
             assert "/" in entry, f"Model '{entry}' missing provider prefix"
 
     def test_provider_preference_reflected(self) -> None:
-        assert PROVIDER_PREFERENCE[0] == "openrouter"
+        assert PROVIDER_PREFERENCE[0] == "opencode"
         assert PROVIDER_PREFERENCE[-1] == "llama-swap"
 
 

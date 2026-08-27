@@ -143,7 +143,8 @@ Only when all gates pass does `do` commit (`feat: <Name>`) and push the branch
   the discovered free models. Leave it as `[]` to rely entirely on discovery.
 - Attempt order = `[requested model]` (or `default_model()` from
   `model_config.json`) **then** every live free model, ordered by
-  `PROVIDER_PREFERENCE` (most-capable provider first), deduplicated.
+  `PROVIDER_PREFERENCE` (opencode family first, then openrouter, llama-swap
+  local last), deduplicated.
 - **Each model gets exactly one attempt** — no repeats. On error / empty
   response / raw tool-call markers, it falls through to the next model.
 - If live discovery yields nothing (e.g. `pi` missing or offline), it falls
