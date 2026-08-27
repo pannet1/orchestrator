@@ -100,7 +100,7 @@ Global flags (parsed in `orch.py`):
 | `--model` / `-m <id>` | Persist `{"model": <id>}` to `model_config.json`, then run with that model leading the chain. |
 | `--no-controller` | Skip `Controller.py` generation (background workers). |
 | `--app` / `-a <app>` | App context (e.g. `-a private` resolves against `features/` instead of `web/features/`). Auto-selected from the domain when the project defines `apps`. |
-| `--max-attempts <n>` | Max LLM attempts across the model chain before giving up (default `6`). |
+| `--max-attempts <n>` | Cap on LLM attempts across the discovered free-model list before giving up (`0` = try every currently-available free model; default `0`). |
 
 **Flow per feature:** `new` → `do` → `merge`. `modify` slots in before `do`.
 `delete`/`undo` discard work. `qa` is a standalone audit.
@@ -128,31 +128,30 @@ Only when all gates pass does `do` commit (`feat: <Name>`) and push the branch
 ## Model selection
 
 - `_orchestrator/llm.py::llm_complete(prompt, system, model, timeout=300,
-  max_attempts=6)` runs `pi -p --mode json --model <m>` and extracts the
+  max_attempts=0)` runs `pi -p --mode json --model <m>` and extracts the
   final assistant text from the JSONL event stream.
+- The free-model list is **queried live** from each provider via
+  `pi --list-models` (cached for 5 minutes). Free-tier providers — notably
+  `opencode` — rotate their catalogue frequently, so the list is discovered
+  every run instead of being hard-coded. Newly rotated-in free models are
+  tried automatically and rotated-out ones are dropped.
+- A model is treated as free when its id carries a `-free` or `:free` suffix
+  (e.g. `opencode/nemotron-3-ultra-free`, `openrouter/cohere/north-mini-code:free`);
+  the local `llama-swap/qwen2.5-coder-7b-instruct` model is always appended as
+  the final fallback (no network needed). `model_chain.json` is now an
+  **optional** pin list: any ids there are tried first, in file order, before
+  the discovered free models. Leave it as `[]` to rely entirely on discovery.
 - Attempt order = `[requested model]` (or `default_model()` from
-  `model_config.json`) **then** the chain in `model_chain.json`, deduplicated,
-  capped at `max_attempts`.
+  `model_config.json`) **then** every live free model, ordered by
+  `PROVIDER_PREFERENCE` (most-capable provider first), deduplicated.
 - **Each model gets exactly one attempt** — no repeats. On error / empty
   response / raw tool-call markers, it falls through to the next model.
-- `model_chain.json` (this repo root) is the editable, most-capable-first
-  free-tier chain. Edit it to reorder without touching code. Fallback is the
-  hardcoded `DEFAULT_MODEL_CHAIN`.
+- If live discovery yields nothing (e.g. `pi` missing or offline), it falls
+  back to the hardcoded `DEFAULT_MODEL_CHAIN`.
 - `--model` (orch.py) writes `model_config.json` so a paid model leads the
   chain for subsequent runs.
 
-Current `model_chain.json`:
-
-```json
-[
-  "openrouter/poolside/laguna-s-2.1:free",
-  "openrouter/cohere/north-mini-code:free",
-  "opencode/nemotron-3-ultra-free",
-  "opencode/deepseek-v4-flash-free",
-  "opencode/laguna-s-2.1-free",
-  "llama-swap/qwen2.5-coder-7b-instruct"
-]
-```
+`model_chain.json` is now `[]` (use live discovery).
 
 ## Rules engine & Constitution (QA gates)
 
@@ -225,7 +224,7 @@ This runs one suite: commands, feature, git, llm, templates, runner, rules.
 | `_orchestrator/config.py` | Paths: `REPO_ROOT`, `AGENTS_DIR`, `PERSONAS_DIR`, `MODEL_CONFIG`; `load_persona()`. |
 | `_orchestrator/rules.py` | Rules engine — executes `rules/python/core.json` checks. |
 | `_orchestrator/runner.py` | Backend subprocess engine (never run by hand). |
-| `model_chain.json` | Editable free-tier model fallback chain (most capable first). |
+| `model_chain.json` | Optional pinned free models (tried first). Live provider discovery is the source of truth. |
 | `model_config.json` | `{"model": "..."}` persisted by `--model`. |
 | `personas/*.md` | `backend_agent.md` (used by `do`), `spec_qa_agent.md` (loaded via `load_persona`). |
 | `rules/python/core.json` | Declarative Python checks (line/text/ast/balanced kinds). |

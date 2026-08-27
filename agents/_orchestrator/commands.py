@@ -243,7 +243,7 @@ def _cmd_feature(target: FeatureTarget, rest: str, prompt_content: str, no_contr
     return CommandResult(success=False)
 
 
-def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 4) -> CommandResult:
+def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> CommandResult:
     if not raw:
         print("[Orchestrator] No feature name given and cannot infer from current branch.")
         return CommandResult(next_action='checkout or create a feature branch first — new <domain/Feature> "prompt"')
@@ -496,7 +496,7 @@ def _resolve_delete(project: ProjectFeatures, action: str, rest: str, app: str) 
         return None, ""
     return project.resolve(raw, app=app), raw
 
-def dispatch(request: str, prompt_content: str = "", no_controller: bool = False, app: str = "", max_attempts: int = 6) -> CommandResult:
+def dispatch(request: str, prompt_content: str = "", no_controller: bool = False, app: str = "", max_attempts: int = 0) -> CommandResult:
 
     prefix, domain, action, rest = _parse_request(request)
     project = load_project(REPO_ROOT)

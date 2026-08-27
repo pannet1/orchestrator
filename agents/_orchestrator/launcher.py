@@ -6,7 +6,7 @@ from pathlib import Path
 from .config import AGENTS_DIR, PERSONAS_DIR, RUNNER
 
 
-def run_runner(persona_key: str, target: Path, task: str, error_path: Path | None = None, max_attempts: int = 4) -> bool:
+def run_runner(persona_key: str, target: Path, task: str, error_path: Path | None = None, max_attempts: int = 0) -> bool:
     persona_path = PERSONAS_DIR / f"{persona_key}_agent.md"
     if not persona_path.exists():
         print(f"[Orchestrator] Persona not found: {persona_path}", file=sys.stderr)

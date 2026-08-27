@@ -28,8 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-attempts",
         type=int,
-        default=6,
-        help="Maximum number of LLM attempts across model chain before giving up (default: 6)",
+        default=0,
+        help="Cap LLM attempts across the discovered free-model list (0 = try all available free models; default: 0)",
     )
     parser.add_argument(
         "--no-controller", action="store_true",

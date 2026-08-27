@@ -30,7 +30,7 @@ VERBOSE = False
 FEATURE_CANONICAL = {"Schema.py", "Handler.py", "Controller.py", "Tests.py"}
 
 
-def _complete(prompt: str, persona: str = "", max_attempts: int = 4) -> str | None:
+def _complete(prompt: str, persona: str = "", max_attempts: int = 0) -> str | None:
     from _orchestrator.llm import llm_complete
 
     return llm_complete(prompt, system=persona, max_attempts=max_attempts)
@@ -99,7 +99,7 @@ def build_retry_prompt(target: Path, last_error: str) -> str:
     )
 
 
-def call_llm(prompt: str, persona: str = "", max_attempts: int = 4) -> str:
+def call_llm(prompt: str, persona: str = "", max_attempts: int = 0) -> str:
     response = _complete(prompt, persona=persona, max_attempts=max_attempts)
     if response is None:
         print("[Runner] LLM call failed.", file=sys.stderr)
@@ -388,7 +388,7 @@ def run_pytest(test_path: Path) -> tuple[bool, str]:
     return passed, output
 
 
-def auto_backend(target: Path, prompt: str, verbose: bool = False, persona: str = "", spec: str = "", max_attempts: int = 4) -> bool:
+def auto_backend(target: Path, prompt: str, verbose: bool = False, persona: str = "", spec: str = "", max_attempts: int = 0) -> bool:
     expected = FEATURE_CANONICAL
     pre_existing = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
     protected_extra = pre_existing - expected
@@ -483,7 +483,7 @@ def run() -> None:
     parser.add_argument("--error", type=Path, help="Path to error/traceback file (for fix loops)")
     parser.add_argument("--api", action="store_true", help="Auto mode: call opencode, write files, run tests")
     parser.add_argument("--prompt-only", action="store_true", help="Print prompt to stdout only (no API call)")
-    parser.add_argument("--max-attempts", type=int, default=4, help="Maximum LLM model-chain attempts (default: 4)")
+    parser.add_argument("--max-attempts", type=int, default=0, help="Maximum LLM model-chain attempts; 0 = try every discovered free model (default: 0)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full prompt and response to stderr")
     args = parser.parse_args()
     if args.verbose:

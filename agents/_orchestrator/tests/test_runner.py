@@ -176,7 +176,7 @@ class TestAutoBackendProtection:
         for name in rr.FEATURE_CANONICAL:
             (target / name).write_text("# old\n")
 
-        monkeypatch.setattr(rr, "call_llm", lambda prompt, persona="": self._llm_output())
+        monkeypatch.setattr(rr, "call_llm", lambda prompt, persona="", **kwargs: self._llm_output())
         monkeypatch.setattr(rr, "run_pytest", lambda test_path: (True, ""))
         monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
         (tmp_path / ".python-version").write_text("3.13\n")

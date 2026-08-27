@@ -11,49 +11,161 @@ from pathlib import Path
 
 from .config import AGENTS_DIR, MODEL_CONFIG, REPO_ROOT
 
-TOOL_CALL_MARKERS = ("<tool_calls>", "<invoke")
+TOOL_CALL_MARKERS = ("<tool_calls>", "<invoke>")
 
 
-# Path to the external model chain config file (editable by the user).
+# Path to the optional pin file (editable by the user).
 MODEL_CHAIN_FILE = AGENTS_DIR / "model_chain.json"
 
 
-# Default chain used when model_chain.json is missing or invalid.
-# Edit agents/model_chain.json to reorder models without touching code.
+# Provider preference order. Free models are tried in this provider order;
+# the local llama-swap model is always the last resort (no network needed).
+PROVIDER_PREFERENCE: tuple[str, ...] = (
+    "openrouter",
+    "opencode",
+    "opencode-go",
+    "llama-swap",
+)
+
+# Local fallback model that should always be available (runs on the machine,
+# no API/network). Kept as the guaranteed final attempt.
+LOCAL_FALLBACK = "llama-swap/qwen2.5-coder-7b-instruct"
+
+# Safety net used only when live model discovery fails entirely (e.g. `pi`
+# missing or offline). Mirrors a last-known-good free chain.
 DEFAULT_MODEL_CHAIN: tuple[str, ...] = (
     "openrouter/poolside/laguna-s-2.1:free",
     "openrouter/cohere/north-mini-code:free",
     "opencode/nemotron-3-ultra-free",
     "opencode/deepseek-v4-flash-free",
     "opencode/laguna-s-2.1-free",
-    "llama-swap/qwen2.5-coder-7b-instruct",
+    LOCAL_FALLBACK,
 )
 
+# Process-lifetime cache of the discovered model ids. Free-tier providers
+# (notably opencode) rotate their model catalogue frequently, so the list is
+# re-queried from each provider on every run instead of being hard-coded.
+_model_cache: list[str] | None = None
+_model_cache_time: float = 0.0
+MODEL_CACHE_TTL = 300.0  # seconds — re-query providers at most every 5 minutes
 
-def _load_model_chain() -> list[str]:
-    """Load the model chain from agents/model_chain.json.
 
-    Falls back to DEFAULT_MODEL_CHAIN if the file is missing or invalid.
-    The chain order is fully editable — each entry is a pi model ID
-    (e.g. "openrouter/slug:model", "nemotron-3-ultra-free", or
-    "qwen2.5-coder-7b-instruct" for the local llama-swap provider).
+def _load_pinned_models() -> list[str]:
+    """Load optional pinned model IDs from agents/model_chain.json.
+
+    These are tried FIRST (in file order) before the dynamically discovered
+    free models, letting a user force a specific favourite. An empty list (or
+    a missing/invalid file) means "use live provider discovery only" — there is
+    no need to maintain the full free-model list by hand anymore.
     """
     if not MODEL_CHAIN_FILE.exists():
-        return list(DEFAULT_MODEL_CHAIN)
+        return []
     try:
         data = json.loads(MODEL_CHAIN_FILE.read_text())
     except (json.JSONDecodeError, OSError):
-        return list(DEFAULT_MODEL_CHAIN)
+        return []
     if isinstance(data, list) and all(isinstance(x, str) for x in data):
         return data
-    return list(DEFAULT_MODEL_CHAIN)
+    return []
 
 
-# Free-tier OpenCode Zen models, most capable first (per provider descriptions:
-# largest/agentic reasoning first, fast tiers after). llm_complete falls down
-# this chain so a failing completion moves to the next model instead of
-# retrying the same one.
-FREE_MODEL_CHAIN: list[str] = _load_model_chain()
+def _pi_binary() -> str | None:
+    return shutil.which("pi")
+
+
+def query_provider_models(force: bool = False) -> list[str]:
+    """Query `pi --list-models` and return all `provider/model` ids.
+
+    This is the single source of truth for which models exist right now.
+    Free-tier providers rotate models often, so we ask the live catalogue
+    rather than trusting a stale hard-coded list. Results are cached for
+    MODEL_CACHE_TTL seconds to avoid hammering the provider on every attempt.
+    Returns [] on any failure (missing binary, network error, parse error).
+    """
+    global _model_cache, _model_cache_time
+    now = time.time()
+    if not force and _model_cache is not None and (now - _model_cache_time) < MODEL_CACHE_TTL:
+        return _model_cache
+
+    omp = _pi_binary()
+    if omp is None:
+        return _model_cache or []
+
+    try:
+        result = subprocess.run(
+            [omp, "--list-models"],
+            capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=30, check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return _model_cache or []
+
+    ids: list[str] = []
+    for line in (result.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if parts[0] == "provider":  # table header
+            continue
+        provider, model = parts[0], parts[1]
+        ids.append(f"{provider}/{model}")
+    _model_cache = ids
+    _model_cache_time = now
+    return ids
+
+
+def refresh_models() -> None:
+    """Drop the model cache so the next call re-queries every provider."""
+    global _model_cache, _model_cache_time
+    _model_cache = None
+    _model_cache_time = 0.0
+
+
+def _is_free(model_id: str) -> bool:
+    """A model is free when its name carries a `-free` or `:free` suffix
+    (e.g. `opencode/nemotron-3-ultra-free`, `openrouter/cohere/...:free`),
+    or is the openrouter `free` aggregate."""
+    name = model_id.split("/", 1)[1] if "/" in model_id else model_id
+    return name.endswith("-free") or ":free" in name or name == "free"
+
+
+def free_model_ids(force: bool = False) -> list[str]:
+    """Return the currently-available free models, ordered by PROVIDER_PREFERENCE.
+
+    Discovery is live, so newly rotated-in free models are picked up
+    automatically and rotated-out ones are dropped. The local llama-swap model
+    is always appended as the final fallback. Falls back to
+    DEFAULT_MODEL_CHAIN when discovery yields nothing.
+    """
+    all_ids = query_provider_models(force=force)
+    if not all_ids:
+        return list(DEFAULT_MODEL_CHAIN)
+
+    free = [m for m in all_ids if _is_free(m)]
+
+    def sort_key(mid: str) -> tuple[int, int]:
+        provider = mid.split("/", 1)[0]
+        try:
+            pidx = PROVIDER_PREFERENCE.index(provider)
+        except ValueError:
+            pidx = len(PROVIDER_PREFERENCE)
+        return (pidx, all_ids.index(mid))
+
+    free.sort(key=sort_key)
+
+    # Optional manual pinning: try these first, in file order.
+    pinned = _load_pinned_models()
+    ordered: list[str] = []
+    for p in pinned:
+        if p not in ordered:
+            ordered.append(p)
+    for m in free:
+        if m not in ordered:
+            ordered.append(m)
+
+    # Always keep the local fallback available as the last resort.
+    if LOCAL_FALLBACK not in ordered:
+        ordered.append(LOCAL_FALLBACK)
+    return ordered
 
 
 def default_model() -> str:
@@ -66,52 +178,25 @@ def default_model() -> str:
     return cfg.get("model", "")
 
 
-def _model_chain(model: str, limit: int) -> list[str]:
-    """Attempt order: an explicitly requested `model` first, then the free
-    model chain (most capable first), deduped and capped at `limit`.
+def _model_chain(model: str, limit: int = 0) -> list[str]:
+    """Attempt order: an explicitly requested `model` (or configured default)
+    leads, then every live free model discovered from the providers, deduped.
+    `limit` caps the chain (0 / negative = try all discovered free models).
     Free-tier values are NOT absorbed — the requested model always leads,
     matching the interactive session's behavior."""
     chain: list[str] = []
     if model:
         chain.append(model)
-    for candidate in FREE_MODEL_CHAIN:
+    for candidate in free_model_ids():
         if candidate not in chain:
             chain.append(candidate)
-        if len(chain) >= limit:
+        if limit and len(chain) >= limit:
             break
-    return chain[:limit]
-
-
-def reload_model_chain() -> list[str]:
-    """Reload the model chain from disk. Call this after editing
-    agents/model_chain.json without restarting the process."""
-    global FREE_MODEL_CHAIN
-    FREE_MODEL_CHAIN = _load_model_chain()
-    return FREE_MODEL_CHAIN
-
-
-def _model_chain(model: str, limit: int) -> list[str]:
-    """Attempt order: an explicitly requested `model` first, then the free
-    model chain (most capable first), deduped and capped at `limit`.
-    Free-tier values are NOT absorbed — the requested model always leads,
-    matching the interactive session's behavior."""
-    chain: list[str] = []
-    if model:
-        chain.append(model)
-    for candidate in FREE_MODEL_CHAIN:
-        if candidate not in chain:
-            chain.append(candidate)
-        if len(chain) >= limit:
-            break
-    return chain[:limit]
-
-
-def _pi_binary() -> str | None:
-    return shutil.which("pi")
+    return chain[:limit] if limit and limit > 0 else chain
 
 
 def _extract_text(ndjson: str) -> str | None:
-    """Pull the final assistant text out of the omp `--mode json` event stream."""
+    """Pull the final assistant text out of the pi `--mode json` event stream."""
     text: list[str] = []
     for line in ndjson.splitlines():
         line = line.strip()
@@ -174,7 +259,7 @@ def _detect_error(line: str) -> tuple[bool, str]:
                 stop_reason = ev.get("message", {}).get("stopReason", "")
                 if stop_reason in ("error", "abort"):
                     return True, f"stopReason={stop_reason}"
-            # Standard omp JSON event without error fields
+            # Standard pi JSON event without error fields
             return False, ""
     except (json.JSONDecodeError, ValueError):
         pass
@@ -192,8 +277,8 @@ def _detect_error(line: str) -> tuple[bool, str]:
     return False, ""
 
 
-class OmpStreamFormatter:
-    """Pretty-prints omp JSON events and streaming progress to stderr."""
+class PiStreamFormatter:
+    """Pretty-prints pi JSON events and streaming progress to stderr."""
 
     def __init__(self, attempt: int, total_attempts: int, model: str):
         self.attempt = attempt
@@ -325,8 +410,8 @@ class OmpStreamFormatter:
         self._ensure_newline()
 
 
-def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 300, max_attempts: int = 6) -> str | None:
-    """One-shot completion routed through the oh-my-pi harness (`pi -p --mode json`).
+def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 300, max_attempts: int = 0) -> str | None:
+    """One-shot completion routed through the pi harness (`pi -p --mode json`).
 
     Mirrors the interactive TUI session as closely as possible: runs in the
     repo root, tools enabled (auto-approved, non-interactive), repo rules and
@@ -334,28 +419,26 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
     instead of receiving giant pasted prompts, and can write files / run
     tests itself.
 
-    Returns the model's final text, or None when omp is unavailable or fails.
-    The per-attempt model walks the free-model chain (FREE_MODEL_CHAIN, most
-    capable first): each model gets exactly one attempt — attempt 1 uses the
-    requested model (or the configured default), then the chain, never
-    repeating a model.
+    Returns the model's final text, or None when pi is unavailable or fails.
+    The per-attempt model walks the live free-model list (discovered from each
+    provider via `pi --list-models`, most-capable provider first): each model
+    gets exactly one attempt — attempt 1 uses the requested model (or the
+    configured default), then every currently-available free model, never
+    repeating a model. Because the catalogue is queried live, rotated-in
+    free models are tried automatically and rotated-out ones are skipped.
 
-    During execution, clean real-time progress is printed to stderr. If an error
-    or auto-retry is encountered, execution breaks out of the attempt immediately
-    and advances to the next model.
+    `max_attempts` caps how many models are tried (0 = try all discovered
+    free models). During execution, clean real-time progress is printed to
+    stderr. If an error or auto-retry is encountered, execution breaks out of
+    the attempt immediately and advances to the next model.
     """
     omp = _pi_binary()
     if omp is None:
-        print("[LLM] pi binary not found on PATH — no oh-my-pi model transport.", file=sys.stderr)
+        print("[LLM] pi binary not found on PATH — no pi model transport.", file=sys.stderr)
         return None
 
-    # Use valid pi options; --auto-approve/--cwd/--max-time removed as they
-    # are not supported in this pi version (0.84.2). CWD defaults to repo root,
-    # timeout is handled by the model chain max_attempts.
-    base_cmd = [
-        omp, "-p", prompt, "--mode", "json",
-        "--model", model,
-    ]
+    # Single --model per invocation (the per-attempt model `m`).
+    base_cmd = [omp, "-p", prompt, "--mode", "json"]
     if system:
         base_cmd += ["--system-prompt", system]
 
@@ -363,8 +446,8 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
     total_models = len(chain)
 
     for i, m in enumerate(chain, 1):
-        cmd = base_cmd[:] + ["--model", m]
-        formatter = OmpStreamFormatter(attempt=i, total_attempts=total_models, model=m)
+        cmd = base_cmd + ["--model", m]
+        formatter = PiStreamFormatter(attempt=i, total_attempts=total_models, model=m)
         formatter.on_attempt_start()
 
         proc = subprocess.Popen(
