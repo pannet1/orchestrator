@@ -1,11 +1,17 @@
 # Orchestrator (`orch.py`)
 
-The orchestrator is a single CLI entry point, `agents/orch.py`. Projects get a
-`.agents` symlink to this directory, so the tool is invoked as:
+The orchestrator is a single CLI entry point, `orch.py` (repo root). Projects get
+a `.agents` symlink to this directory, so the tool is invoked from inside a
+target project as:
 
 ```
 ./.agents/orch.py <action> <domain/Feature> [inline prompt] [options]
 ```
+
+> `REPO_ROOT = Path.cwd()` — the orchestrator operates on **whatever directory
+> you run it from** (the target project), not on this repo. This repo is the
+> tool. `model_config.json`, `model_chain.json`, `personas/`, and `rules/` live
+> at this repo root (i.e. `.agents/...` from a target project).
 
 Every command routes through `_orchestrator/commands.py::dispatch()`. There are
 no other entry points — `runner.py` is an internal subprocess (never run by
@@ -17,7 +23,7 @@ have been deleted.
 | Flag | Effect |
 |---|---|
 | `--prompt` / `-p <path-or-text>` | Prompt file (`.md` read from disk) or inline string. Positional text after the target is also accepted. |
-| `--model` / `-m <id>` | Persist `{"model": <id>}` to `agents/model_config.json`, then continue the run with that model. Paid models (e.g. `claude-sonnet-4-5`) lead the fallback chain; free models are absorbed into the chain order. |
+| `--model` / `-m <id>` | Persist `{"model": <id>}` to `model_config.json` (this repo root), then continue the run with that model leading the chain. |
 | `--no-controller` | Skip `Controller.py` generation (background workers). |
 | `--app` / `-a <app>` | App context, e.g. `-a private` resolves against `features/` instead of `web/features/`. Auto-selected from the domain when the project defines `apps`. |
 
@@ -63,7 +69,7 @@ Flow per feature: `new` → `do` → `merge`. `modify` slots in before `do`.
 
 ## Rules engine
 
-`agents/rules/<lang>/core.json` holds declarative checks per language
+`rules/<lang>/core.json` (this repo root, i.e. `.agents/rules/...` from a target project) holds declarative checks per language
 (currently `python/`). The engine in `_orchestrator/rules.py` classifies
 files by extension, loads the matching rule set, and executes checks
 (`line`, `text-required`, `balanced`, `py-ast` kinds). Both consumers use
@@ -72,7 +78,7 @@ this single registry:
 - `orch.py qa` — audits every `.py` in the repo + feature slices.
 - `runner.py` — `validate_code_standards` (group `standards`) and `validate_code_structure` (group `structure`).
 
-To add a check, edit `agents/rules/python/core.json` (or create a new
+To add a check, edit `rules/python/core.json` (or create a new
 language dir). No code changes required.
 
 ## Code-generation pipeline (`do`)
@@ -97,16 +103,27 @@ Only when all gates pass does `do` commit and push.
 ## Model selection
 
 `_orchestrator/llm.py::llm_complete(prompt, system, model, timeout=300,
-max_attempts=4)`. One attempt per model — no repeats:
+max_attempts=6)` shells out to the **`pi` CLI** (`pi -p --mode json --model <m>`)
+and extracts the final assistant text from the JSONL event stream. Attempt
+order = `[requested model]` (or `default_model()` from `model_config.json`)
+**then** the chain in `model_chain.json`, deduplicated, capped at
+`max_attempts`. Each model gets exactly one attempt — no repeats; on error /
+empty response / raw tool-call markers it falls through to the next model.
 
-- Free fallback chain (most capable first):
-  `nemotron-3-ultra-free` → `deepseek-v4-flash-free` →
-  `nemotron-3.5-lightning-free`.
-- Explicit paid `--model` leads the chain ahead of the free tier; a `-free`
-  config/override value is absorbed into the chain order.
-- With a `system` prompt, the reply must begin with a per-call `[VERIFY_…]`
-  token; failure advances to the next model. All free models exhausted →
-  `None`.
+`model_chain.json` (this repo root) is the editable, most-capable-first
+tier-one chain — edit it to reorder without touching code. `--model` writes
+`model_config.json` so a paid model leads subsequent runs. Current chain:
+
+```json
+[
+  "openrouter/poolside/laguna-s-2.1:free",
+  "openrouter/cohere/north-mini-code:free",
+  "opencode/nemotron-3-ultra-free",
+  "opencode/deepseek-v4-flash-free",
+  "opencode/laguna-s-2.1-free",
+  "llama-swap/qwen2.5-coder-7b-instruct"
+]
+```
 
 ## Supporting files
 
@@ -119,18 +136,19 @@ max_attempts=4)`. One attempt per model — no repeats:
 | `_orchestrator/specs.py` | Spec generation/QA (`rewrite_spec_with_ai`, `amend_spec`, `_qa_spec`, `_validate_spec`). |
 | `_orchestrator/git_ops.py` | Every git operation — commands.py never shells out to git itself. |
 | `_orchestrator/launcher.py` | Spawns `runner.py` with a persona. |
-| `_orchestrator/llm.py` | Zen-model completions with fallback chain (sole owner of model selection). |
+| `_orchestrator/llm.py` | `pi`-based completions with the model chain (sole owner of model selection). |
 | `_orchestrator/prompts.py` | Prompt resolution incl. current-file detection via `nvim --headless`. |
 | `_orchestrator/templates.py` | Code + spec templates, default overview. |
 | `_orchestrator/config.py` | Paths: `REPO_ROOT`, `AGENTS_DIR`, `PERSONAS_DIR`, `MODEL_CONFIG`; `load_persona(name)`. |
-| `_orchestrator/rules.py` | Rules engine — executes `agents/rules/<lang>/core.json` checks. |
+| `_orchestrator/rules.py` | Rules engine — executes `rules/<lang>/core.json` checks. |
 | `_orchestrator/runner.py` | Backend subprocess engine (never run by hand). |
-| `agents/rules/python/core.json` | Declarative Python checks (line/text/ast/balanced kinds). |
+| `rules/python/core.json` (via `.agents/`) | Declarative Python checks (line/text/ast/balanced kinds). |
 | `personas/*.md` | `backend_agent.md` (used by `do`), `spec_qa_agent.md` (loaded via `load_persona`). |
 
 ## Tests
 
+The orchestrator is managed with **uv** (no `.venv`, no pip). From this repo root:
+
 ```
-cd agents
-.venv/bin/python -m pytest _orchestrator/tests -q   # single suite: commands, feature, git, llm, templates, runner, rules (182)
+uv run pytest _orchestrator/tests -q   # single suite: commands, feature, git, llm, templates, runner, rules
 ```
