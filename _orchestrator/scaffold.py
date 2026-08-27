@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -57,7 +58,13 @@ def scaffold_new_feature(target, overview: str = "", no_controller: bool = False
 
 
 def init_new_project(project_dir: Path) -> bool:
-    """Create a new project folder with a .agents symlink, then cd into it."""
+    """Create a new project folder with a .agents symlink + its own git repo.
+
+    The target gets an *independent* `.git` (a sibling of this orchestrator
+    repo, never nested inside it) so the branch-per-feature workflow works.
+    The orchestrator's own `.git` is never touched, and `.agents` is
+    gitignored so the tool sources are not committed into the target.
+    """
     project_dir = project_dir.resolve()
     project_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(project_dir)
@@ -67,5 +74,37 @@ def init_new_project(project_dir: Path) -> bool:
         rel = os.path.relpath(str(AGENTS_DIR), str(project_dir))
         dot_link.symlink_to(rel)
         print(f"  .agents/ -> {rel}")
+
+    # Initialize an independent git repository for the target project.
+    existing = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, cwd=str(project_dir), check=False,
+    )
+    if existing.returncode == 0 and Path(existing.stdout.strip()) != project_dir:
+        print("[Orchestrator] Refusing: target is inside an existing git repo "
+              f"({existing.stdout.strip()}). Create the project outside this repo.")
+        return False
+
+    if existing.returncode != 0:
+        subprocess.run(["git", "init"], cwd=str(project_dir), check=True)
+        # Force the default branch to `main` regardless of local git config.
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+            cwd=str(project_dir), check=True,
+        )
+        # Keep the orchestrator symlink + Python caches out of the repo.
+        (project_dir / ".gitignore").write_text(
+            ".agents/\n__pycache__/\n*.pyc\n.venv/\n"
+            ".mypy_cache/\n.ruff_cache/\n.pytest_cache/\n"
+        )
+        subprocess.run(["git", "add", ".gitignore"], cwd=str(project_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: initialize project"],
+            cwd=str(project_dir), check=True,
+        )
+        print("[Orchestrator] Initialized git repository (branch: main).")
+    else:
+        print("[Orchestrator] Target already a git repository; left it untouched.")
+
     print(f"[Orchestrator] Project ready at {project_dir}")
     return True

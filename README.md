@@ -38,7 +38,7 @@ git branch name.
 
 | Command | What it does | Next |
 |---|---|---|
-| `init <path>/<project-name>` | Create project folder + `.agents` symlink, chdir into it. Does **not** create `.features.json`. Prompt arg ignored. | `new` |
+| `init <path>/<project-name>` | Create project folder + `.agents` symlink + its own independent git repo (`main` + initial commit + `.gitignore` excluding `.agents`). Does **not** create `.features.json`. Prompt arg ignored. | `new` |
 | `new <domain/Feature> "prompt"` | Create feature branch, write spec.md (LLM-generated + spec-QA'd, template fallback), scaffold 4 files (`Schema.py`, `Handler.py`, `Controller.py`, `Tests.py`) + `__init__.py`, register in `.features.json`. | `do` |
 | `modify <domain/Feature> "prompt"` | Amend the feature's spec.md via LLM + append a `CONTRACT AMENDMENT` section; branch `modify/<Feature>`. Implicit mode (no target): uses the file currently open in nvim. Creates the feature dir if missing (no controller). | `do` |
 | `do [Feature]` | Run the backend agent: LLM implements spec.md, QA gates validate, pytest must pass; then stage + commit (`feat: <Name>`) + push the branch (**not merged**). On `main` with clean slate, auto-creates the feature branch. | `merge` |
