@@ -80,6 +80,8 @@ def init_new_project(project_dir: Path) -> bool:
     os.chdir(project_dir)
 
     dot_link = project_dir / ".agents"
+    if dot_link.is_symlink() and not dot_link.exists():
+        dot_link.unlink()
     if not dot_link.is_symlink() and not dot_link.exists():
         rel = os.path.relpath(str(AGENTS_DIR), str(project_dir))
         dot_link.symlink_to(rel)
@@ -97,9 +99,11 @@ def init_new_project(project_dir: Path) -> bool:
     pyproject = project_dir / "pyproject.toml"
     if not pyproject.exists():
         pyproject.write_text(
-            f'[project]\nname = "{project_dir.name.lower()}"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+            f'[project]\nname = "{project_dir.name.lower()}"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n\n'
+            "[dependency-groups]\ndev = [\n    \"pytest>=8.0.0\",\n]\n\n"
+            "[tool.pytest.ini_options]\npythonpath = [\".\"]\n"
         )
-        print("  pyproject.toml -> uv-managed")
+        print("  pyproject.toml -> uv-managed (with pytest & pythonpath)")
 
     # Scaffold minimal shared/logger.py so feature imports succeed out of the box
     shared_dir = project_dir / "shared"

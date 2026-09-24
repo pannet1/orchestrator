@@ -362,11 +362,29 @@ class TestInitHandler:
         assert (proj / ".agents").is_symlink()
         assert (proj / ".python-version").exists()
         assert (proj / "pyproject.toml").exists()
+        pyproject_content = (proj / "pyproject.toml").read_text()
+        assert "pytest" in pyproject_content
+        assert 'pythonpath = ["."]' in pyproject_content
         assert (proj / "shared" / "logger.py").exists()
         assert not (proj / ".features.json").exists()
         assert not (proj / "features").is_dir()
         assert not (proj / "SPEC.md").exists()
         assert Path.cwd() == proj
+
+    def test_init_heals_broken_symlink(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.chdir(tmp_path)
+        proj = tmp_path / "broken_proj"
+        proj.mkdir()
+        broken_link = proj / ".agents"
+        broken_link.symlink_to("/nonexistent/agents/path")
+        assert broken_link.is_symlink()
+        assert not broken_link.exists()
+
+        from agents.scaffold import init_new_project
+        init_new_project(proj)
+        assert (proj / ".agents").is_symlink()
+        assert (proj / ".agents").exists()
 
     def test_init_ignores_prompt_argument(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())

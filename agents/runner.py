@@ -517,7 +517,7 @@ def extract_json_blocks(text: str) -> dict[str, str]:
 def run_pytest(test_path: Path) -> tuple[bool, str]:
     env = os.environ.copy()
     feature_dir = str(test_path.parent)
-    env["PYTHONPATH"] = feature_dir + ":" + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = feature_dir + os.pathsep + str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     with subprocess.Popen(
         ["uv", "run", "pytest", str(test_path), "--tb=long", "-v"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
