@@ -577,3 +577,40 @@ class TestIncrementalRetryAndAuxiliary:
 
         assert ok is True
         assert (target / "models.py").exists()
+
+    def test_auto_backend_with_custom_canonical_manifest(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+
+        schema = "from pydantic import BaseModel\\n\\n\\nclass S(BaseModel):\\n    pass\\n"
+        worker = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\nclass W:\\n    def run(self) -> str:\\n        return \\\"ok\\\"\\n"
+        tests = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\ndef test_x() -> None:\\n    assert True\\n"
+
+        output = (
+            '{"Schema.py": "' + schema + '", '
+            '"Worker.py": "' + worker + '", '
+            '"Tests.py": "' + tests + '"}'
+        )
+
+        monkeypatch.setattr(rr, "call_llm", lambda prompt, persona="", **kwargs: output)
+        monkeypatch.setattr(rr, "run_pytest", lambda test_path: (True, ""))
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+        (tmp_path / ".python-version").write_text("3.13\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        custom_manifest = {"Schema.py", "Worker.py", "Tests.py"}
+        ok = rr.auto_backend(target, "prompt", persona="p", expected=custom_manifest)
+
+        assert ok is True
+        assert (target / "Schema.py").exists()
+        assert (target / "Worker.py").exists()
+        assert (target / "Tests.py").exists()
+        assert not (target / "Controller.py").exists()
+        assert not (target / "Handler.py").exists()
+
+    def test_build_prompt_with_custom_canonical(self, tmp_path: Path) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        target_files = {"spec.md": "# Spec"}
+        prompt = rr.build_prompt("persona", target, target_files, "task", "", expected={"Schema.py", "Worker.py", "Tests.py"})
+        assert "Write the required files (Schema.py, Tests.py, Worker.py)" in prompt

@@ -103,6 +103,7 @@ Global flags (parsed in `orch.py`):
 | `--no-controller` | Skip `Controller.py` generation (background workers). |
 | `--app` / `-a <app>` | App context (e.g. `-a private` resolves against `features/` instead of `web/features/`). Auto-selected from the domain when the project defines `apps`. |
 | `--max-attempts <n>` | Cap on LLM attempts across the discovered free-model list before giving up (`0` = try every currently-available free model; default `0`). |
+| `--canonical <f1,f2,...>` | Override the expected canonical files for this run (e.g. `Schema.py,Worker.py,Tests.py`). |
 
 **Flow per feature:** `new` → `do` → `merge`. `modify` slots in before `do`.
 `delete`/`undo` discard work. `qa` is a standalone audit.
@@ -122,7 +123,8 @@ Global flags (parsed in `orch.py`):
 3. Static QA gates (all must pass): structure, code standards (from
    `agents/rules/python.json`), the 11-rule **constitution**, PEP8
    (E302/E501), no truncation, and canonical files present (`Schema.py`,
-   `Handler.py`, `Controller.py` unless `--no-controller`, and `Tests.py`).
+   `Handler.py`, `Controller.py` unless `--no-controller`, `Tests.py`,
+   or project/domain `canonical_files` defined in `.features.json`).
 4. `pytest` on the feature's `Tests.py` is executed inside the attempt loop.
 5. On failure of any static gate OR pytest, the loop re-runs with the error output
    (including stack traces and assertion failures) fed back to the LLM; the LLM

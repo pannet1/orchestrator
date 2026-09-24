@@ -324,3 +324,40 @@ class TestLoadProject:
         project = load_project(tmp_path)
         assert project.config_path == cfg
         assert project.features_root == tmp_path / "src" / "features"
+
+
+class TestCanonicalFilesManifest:
+
+    def test_project_canonical_files_default(self, tmp_path: Path) -> None:
+        project = _project(tmp_path, config={})
+        assert project.get_canonical_files() == frozenset({"Schema.py", "Handler.py", "Controller.py", "Tests.py"})
+
+    def test_project_canonical_files_custom(self, tmp_path: Path) -> None:
+        cfg = {"canonical_files": ["Schema.py", "Worker.py", "Tests.py"]}
+        project = _project(tmp_path, config=cfg)
+        assert project.get_canonical_files() == frozenset({"Schema.py", "Worker.py", "Tests.py"})
+
+    def test_project_canonical_files_domain_override(self, tmp_path: Path) -> None:
+        cfg = {
+            "canonical_files": ["Schema.py", "Handler.py", "Controller.py", "Tests.py"],
+            "domains": {
+                "events": {"canonical_files": ["Event.py", "Consumer.py", "Tests.py"]},
+            },
+        }
+        project = _project(tmp_path, config=cfg)
+        assert project.get_canonical_files("events") == frozenset({"Event.py", "Consumer.py", "Tests.py"})
+        assert project.get_canonical_files("other") == frozenset({"Schema.py", "Handler.py", "Controller.py", "Tests.py"})
+
+    def test_target_carries_canonical_files(self, tmp_path: Path) -> None:
+        cfg = {
+            "canonical_files": ["Schema.py", "Handler.py", "Tests.py"],
+            "domains": {
+                "workers": {"canonical_files": ["Worker.py", "Tests.py"]},
+            },
+        }
+        project = _project(tmp_path, config=cfg)
+        target1 = project.target_for_new("TaskQueue", domain="workers")
+        assert target1.canonical_files == frozenset({"Worker.py", "Tests.py"})
+
+        target2 = project.target_for_new("Payment", domain="billing")
+        assert target2.canonical_files == frozenset({"Schema.py", "Handler.py", "Tests.py"})

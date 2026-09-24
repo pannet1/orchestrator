@@ -56,7 +56,10 @@ Flow per feature: `new` → `do` → `merge`. `modify` slots in before `do`.
 
 - `.features.json` (repo root, or discovered nested): `features_dir` (default
   `features`), `known_features` (name → domain), `domain_keywords`
-  (keyword → [domain, action]), optional per-`apps` override configs.
+  (keyword → [domain, action]), optional `canonical_files` (custom slice
+  manifest, e.g. `["Schema.py", "Worker.py", "Tests.py"]`), optional
+  per-domain overrides under `domains.<domain>.canonical_files`, and
+  optional per-`apps` override configs.
 - Domains are subdirectories of `features_dir`; a feature is
   `features/<domain>/<Feature>/`.
 - Branches are named `<domain>/<Feature>` (or `modify/<Feature>`), mirroring

@@ -55,9 +55,10 @@ def write_file(path: Path, content: str) -> None:
         f.write(content)
 
 
-def collect_target_files(target: Path) -> dict:
+def collect_target_files(target: Path, expected: set[str] | frozenset[str] | list[str] | None = None) -> dict:
+    expected_files = expected if expected is not None else FEATURE_CANONICAL
     files = {}
-    for fname in ["spec.md", *FEATURE_CANONICAL]:
+    for fname in ["spec.md", *expected_files]:
         path = target / fname
         if path.exists():
             files[fname] = read_file(path)
@@ -67,7 +68,15 @@ def collect_target_files(target: Path) -> dict:
     return files
 
 
-def build_prompt(persona: str, target: Path, target_files: dict, task: str, error: str) -> str:
+def build_prompt(
+    persona: str,
+    target: Path,
+    target_files: dict,
+    task: str,
+    error: str,
+    expected: set[str] | frozenset[str] | list[str] | None = None,
+) -> str:
+    req_files = ", ".join(sorted(expected)) if expected else "Schema.py, Handler.py, Controller.py, Tests.py"
     parts: list[str] = []
     parts.append("## Target Directory")
     parts.append(str(target))
@@ -79,7 +88,7 @@ def build_prompt(persona: str, target: Path, target_files: dict, task: str, erro
         "- Read spec.md in the target directory first; it is the contract.\n"
         "- Read the existing files in the target directory before editing.\n"
         "- Follow the repo rules in AGENTS.md (read it if needed).\n"
-        "- Write the required files (Schema.py, Handler.py, Controller.py, Tests.py) into the target "
+        f"- Write the required files ({req_files}) into the target "
         "directory with the write tool.\n"
         "- Never modify files outside the target directory. Never commit or push.\n"
         "- Run `uv run pytest <target>/Tests.py` to verify before finishing; iterate on failures.\n"
@@ -532,8 +541,15 @@ def auto_backend(
     max_attempts: int = 0,
     no_controller: bool = False,
     allow_auxiliary: bool = True,
+    expected: set[str] | frozenset[str] | list[str] | None = None,
 ) -> bool:
-    expected = FEATURE_CANONICAL - {"Controller.py"} if no_controller else FEATURE_CANONICAL
+    if expected is not None:
+        expected_set = set(expected)
+    else:
+        expected_set = set(FEATURE_CANONICAL)
+    if no_controller:
+        expected_set.discard("Controller.py")
+    expected = expected_set
     pre_existing = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
     protected_extra = pre_existing - expected
     known_files = set(pre_existing)
@@ -651,6 +667,7 @@ def run() -> None:
     parser.add_argument("--max-attempts", type=int, default=0, help="Maximum LLM model-chain attempts; 0 = try every discovered free model (default: 0)")
     parser.add_argument("--no-controller", action="store_true", help="Skip Controller.py requirement")
     parser.add_argument("--no-auxiliary", action="store_true", help="Disallow auxiliary non-canonical .py files")
+    parser.add_argument("--canonical", help="Comma-separated list of expected canonical files (e.g. Schema.py,Handler.py,Tests.py)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full prompt and response to stderr")
     args = parser.parse_args()
     if args.verbose:
@@ -664,14 +681,29 @@ def run() -> None:
         print(f"Error: target not found: {args.target}", file=sys.stderr)
         sys.exit(1)
 
+    if args.canonical:
+        expected_files: set[str] = {f.strip() for f in args.canonical.split(",") if f.strip()}
+    else:
+        expected_files = set(FEATURE_CANONICAL)
+        try:
+            from agents.feature import ProjectFeatures
+            proj = ProjectFeatures.load(REPO_ROOT)
+            domain = proj.domain_of(args.target) if hasattr(proj, "domain_of") else ""
+            expected_files = set(proj.get_canonical_files(domain))
+        except Exception:
+            pass
+
+    if args.no_controller:
+        expected_files.discard("Controller.py")
+
     persona = read_file(args.persona)
-    target_files = collect_target_files(args.target)
+    target_files = collect_target_files(args.target, expected=expected_files)
     task = args.task or f"Work on the feature at {args.target}"
     error = ""
     if args.error and args.error.exists():
         error = read_file(args.error)
 
-    prompt = build_prompt(persona, args.target, target_files, task, error)
+    prompt = build_prompt(persona, args.target, target_files, task, error, expected=expected_files)
 
     if args.prompt_only or not args.api:
         print("=== PERSONA (system message) ===")
@@ -690,6 +722,7 @@ def run() -> None:
         max_attempts=args.max_attempts,
         no_controller=args.no_controller,
         allow_auxiliary=not args.no_auxiliary,
+        expected=expected_files,
     )
     if not ok:
         sys.exit(1)

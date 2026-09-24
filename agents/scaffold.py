@@ -41,10 +41,22 @@ def scaffold_new_feature(target, overview: str = "", no_controller: bool = False
         ).rstrip("\n")
         (slice_dir / "spec.md").write_text(spec)
 
-    for fname, template in CODE_TEMPLATES.items():
-        if no_controller and fname == "Controller.py":
-            continue
-        content = template.format(action=target.name).lstrip("\n")
+    canonical = getattr(target, "canonical_files", None)
+    expected_files = set(canonical) if canonical else set(CODE_TEMPLATES.keys())
+    if no_controller:
+        expected_files.discard("Controller.py")
+
+    for fname in sorted(expected_files):
+        if fname in CODE_TEMPLATES:
+            content = CODE_TEMPLATES[fname].format(action=target.name).lstrip("\n")
+        else:
+            module_name = Path(fname).stem
+            content = (
+                "from shared.logger import logging_func\n\n"
+                f"logger = logging_func(__name__)\n\n\n"
+                f"class {target.name}{module_name}:\n"
+                f"    pass\n"
+            )
         (slice_dir / fname).write_text(content)
 
     (slice_dir / "__init__.py").touch()

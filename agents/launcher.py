@@ -13,6 +13,7 @@ def run_runner(
     error_path: Path | None = None,
     max_attempts: int = 0,
     no_controller: bool = False,
+    canonical_files: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
 ) -> bool:
     persona_path = PERSONAS_DIR / f"{persona_key}_agent.md"
     if not persona_path.exists():
@@ -29,6 +30,8 @@ def run_runner(
     ]
     if no_controller:
         cmd.append("--no-controller")
+    if canonical_files:
+        cmd += ["--canonical", ",".join(sorted(canonical_files))]
     if error_path:
         cmd += ["--error", str(error_path)]
 

@@ -507,3 +507,22 @@ class TestKnownPrefixes:
     def test_includes_all_commands(self) -> None:
         expected = {"new", "do", "modify", "delete", "move", "merge", "undo", "init", "scan", "qa"}
         assert _KNOWN_PREFIXES == expected
+
+
+class TestScaffoldDynamicManifest:
+
+    def test_scaffold_with_custom_canonical_files(self, tmp_path: Path) -> None:
+        cfg = tmp_path / ".features.json"
+        cfg.write_text(json.dumps({"canonical_files": ["Schema.py", "Worker.py", "Tests.py"]}) + "\n")
+        project = ProjectFeatures.load(tmp_path)
+        target = project.target_for_new("IngestData", "pipeline")
+        slice_dir = scaffold_new_feature(target, "")
+
+        assert (slice_dir / "Schema.py").exists()
+        assert (slice_dir / "Worker.py").exists()
+        assert (slice_dir / "Tests.py").exists()
+        assert not (slice_dir / "Controller.py").exists()
+        assert not (slice_dir / "Handler.py").exists()
+        content = (slice_dir / "Worker.py").read_text()
+        assert "from shared.logger import logging_func" in content
+        assert "class IngestDataWorker:" in content

@@ -300,7 +300,15 @@ def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> Co
     commit_type = "feat"
 
     has_controller = (feature_dir / "Controller.py").exists()
-    ok = run_runner("backend", feature_dir, task, max_attempts=max_attempts, no_controller=not has_controller)
+    canonical = getattr(target, "canonical_files", None)
+    ok = run_runner(
+        "backend",
+        feature_dir,
+        task,
+        max_attempts=max_attempts,
+        no_controller=not has_controller,
+        canonical_files=canonical,
+    )
     if ok:
         register_target(target)
         print(f"\n{'='*60}\nALL TESTS PASSED.\n")

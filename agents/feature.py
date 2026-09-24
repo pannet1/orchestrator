@@ -36,6 +36,7 @@ class FeatureTarget:
     root: Path
     config_path: Path
     app: str = ""
+    canonical_files: frozenset[str] = frozenset({"Schema.py", "Handler.py", "Controller.py", "Tests.py"})
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ class ProjectFeatures:
     apps: dict[str, AppConfig] = field(default_factory=dict)
     known_features: dict[str, str] = field(default_factory=dict)
     domain_keywords: dict[str, tuple[str, str]] = field(default_factory=dict)
+    canonical_files: tuple[str, ...] = ("Schema.py", "Handler.py", "Controller.py", "Tests.py")
+    domain_canonical: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, repo_root: Path) -> "ProjectFeatures":
@@ -75,6 +78,21 @@ class ProjectFeatures:
                 cfg = {}
         default_dir_name = str(cfg.get("features_dir", "features"))
         features_root = repo_root / default_dir_name
+
+        canonical = cfg.get("canonical_files")
+        if isinstance(canonical, (list, tuple)):
+            canonical_files = tuple(str(x) for x in canonical)
+        else:
+            canonical_files = ("Schema.py", "Handler.py", "Controller.py", "Tests.py")
+
+        domain_canonical: dict[str, tuple[str, ...]] = {}
+        domains_cfg = cfg.get("domains", {})
+        if isinstance(domains_cfg, dict):
+            for dom, d_data in domains_cfg.items():
+                if isinstance(d_data, dict) and "canonical_files" in d_data:
+                    c = d_data["canonical_files"]
+                    if isinstance(c, (list, tuple)):
+                        domain_canonical[str(dom)] = tuple(str(x) for x in c)
 
         apps: dict[str, AppConfig] = {}
         for key, app_cfg in cfg.get("apps", {}).items():
@@ -113,6 +131,8 @@ class ProjectFeatures:
             apps=apps,
             known_features=known,
             domain_keywords=keywords,
+            canonical_files=canonical_files,
+            domain_canonical=domain_canonical,
         )
 
     # -- structure ----------------------------------------------------------
@@ -164,17 +184,24 @@ class ProjectFeatures:
                 best, best_len = r, len(rr.parts)
         return best
 
+    def get_canonical_files(self, domain: str = "") -> frozenset[str]:
+        if domain and domain in self.domain_canonical:
+            return frozenset(self.domain_canonical[domain])
+        return frozenset(self.canonical_files)
+
     def _target_for_dir(self, feature_dir: Path) -> FeatureTarget:
         root = self._root_of(feature_dir)
         app = next((a.key for a in self.apps.values() if a.features_dir == root), "")
         config = self.apps[app].config_path if app else self.config_path
+        domain = self.domain_of(feature_dir)
         return FeatureTarget(
             name=feature_dir.name,
-            domain=self.domain_of(feature_dir),
+            domain=domain,
             dir=feature_dir,
             root=root,
             config_path=config,
             app=app,
+            canonical_files=self.get_canonical_files(domain),
         )
 
     # -- resolution ----------------------------------------------------------
@@ -201,6 +228,7 @@ class ProjectFeatures:
             root=root,
             config_path=config,
             app=app,
+            canonical_files=self.get_canonical_files(domain),
         )
 
     def resolve(self, raw: str, app: str = "") -> FeatureTarget | None:
