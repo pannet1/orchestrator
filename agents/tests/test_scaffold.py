@@ -34,10 +34,10 @@ class TestScaffold:
 
         spec_content = (slice_dir / "spec.md").read_text()
         assert "## Expected Files" in spec_content
-        assert "`Schema.py`" in spec_content
-        assert "`Handler.py`" in spec_content
-        assert "`Controller.py`" in spec_content
-        assert "`Tests.py`" in spec_content
+        assert "* `Schema.py`: Data validation models" in spec_content
+        assert "* `Handler.py`: Core business logic" in spec_content
+        assert "* `Controller.py`: Interface endpoints" in spec_content
+        assert "* `Tests.py`: Unit and integration test suite" in spec_content
 
     def test_scaffold_new_feature_no_controller(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         slice_dir = tmp_path / "features" / "billing" / "Worker"

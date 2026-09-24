@@ -9,6 +9,14 @@ from .specs import _qa_spec, parse_expected_files
 from .templates import CODE_TEMPLATES, DEFAULT_OVERVIEW, SPEC_TEMPLATE
 
 
+DEFAULT_FILE_DESCRIPTIONS: dict[str, str] = {
+    "Schema.py": "Data validation models, request/response schemas, and types",
+    "Handler.py": "Core business logic execution and feature workflow orchestration",
+    "Controller.py": "Interface endpoints, routing, or dispatch entry points",
+    "Tests.py": "Unit and integration test suite covering positive paths and edge cases",
+}
+
+
 def format_spec_overview(overview: str) -> str:
     if overview:
         return overview
@@ -24,7 +32,11 @@ def scaffold_new_feature(target, overview: str = "", no_controller: bool = False
     if no_controller:
         expected_files = [f for f in expected_files if f != "Controller.py"]
 
-    expected_files_md = "\n".join(f"* `{fname}`" for fname in sorted(expected_files))
+    file_lines = []
+    for fname in sorted(expected_files):
+        desc = DEFAULT_FILE_DESCRIPTIONS.get(fname, f"Implementation module for {target.name}")
+        file_lines.append(f"* `{fname}`: {desc}")
+    expected_files_md = "\n".join(file_lines)
 
     if overview:
         ai_spec = generate_spec_with_ai(target.domain, target.name, overview)
