@@ -100,7 +100,9 @@ language file). No code changes required.
    then `pytest` on the feature's tests inside the retry loop.
 5. On failure of any gate or test, loop re-runs with the error output
    (`auto_backend`), enabling targeted single-file or patch repairs before
-   exhausting attempts.
+   exhausting attempts. If 3 automated attempts exhaust, an interactive fallback
+   allows the developer to supply guidance hints (`r`), re-verify manual edits (`v`),
+   or quit (`q`).
 
 Only when all gates and tests pass does `do` commit (`feat: <Name>`, staging both
 the feature directory and `.features.json`) and push.

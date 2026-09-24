@@ -35,9 +35,13 @@ def run_runner(
     if error_path:
         cmd += ["--error", str(error_path)]
 
-    # runner.py is a package member now; make the package importable for the subprocess.
     env = dict(os.environ)
     env["PYTHONPATH"] = str(AGENTS_DIR.parent) + os.pathsep + str(AGENTS_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONUNBUFFERED"] = "1"
+
+    if sys.stdin.isatty():
+        result = subprocess.run(cmd, env=env)
+        return result.returncode == 0
 
     with subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:
         if proc.stdout is None:

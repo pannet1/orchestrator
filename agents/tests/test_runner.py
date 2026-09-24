@@ -614,3 +614,215 @@ class TestIncrementalRetryAndAuxiliary:
         target_files = {"spec.md": "# Spec"}
         prompt = rr.build_prompt("persona", target, target_files, "task", "", expected={"Schema.py", "Worker.py", "Tests.py"})
         assert "Write the required files (Schema.py, Tests.py, Worker.py)" in prompt
+
+
+# ── Interactive Sub-Agent Fallback & Verification ───────────────────
+
+class TestInteractiveFallback:
+    def test_handle_interactive_fallback_retry_with_hint(self, tmp_path: Path) -> None:
+        inputs = iter(["r", "use pendulum for timestamps"])
+        action, hint = rr.handle_interactive_fallback(tmp_path, "Pytest failed", stdin_fn=lambda _: next(inputs))
+        assert action == "retry"
+        assert hint == "use pendulum for timestamps"
+
+    def test_handle_interactive_fallback_retry_without_hint(self, tmp_path: Path) -> None:
+        inputs = iter(["r", ""])
+        action, hint = rr.handle_interactive_fallback(tmp_path, "Error", stdin_fn=lambda _: next(inputs))
+        assert action == "retry"
+        assert hint == ""
+
+    def test_handle_interactive_fallback_verify(self, tmp_path: Path) -> None:
+        inputs = iter(["v"])
+        action, hint = rr.handle_interactive_fallback(tmp_path, "Error", stdin_fn=lambda _: next(inputs))
+        assert action == "verify"
+        assert hint == ""
+
+    def test_handle_interactive_fallback_quit(self, tmp_path: Path) -> None:
+        inputs = iter(["q"])
+        action, hint = rr.handle_interactive_fallback(tmp_path, "Error", stdin_fn=lambda _: next(inputs))
+        assert action == "quit"
+        assert hint == ""
+
+    def test_handle_interactive_fallback_eof(self, tmp_path: Path) -> None:
+        def raise_eof(_: str) -> str:
+            raise EOFError
+        action, hint = rr.handle_interactive_fallback(tmp_path, "Error", stdin_fn=raise_eof)
+        assert action == "quit"
+        assert hint == ""
+
+
+class TestVerifyTargetFiles:
+    def test_verify_target_files_success(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        (target / "Schema.py").write_text("from pydantic import BaseModel\n\n\nclass S(BaseModel):\n    pass\n")
+        (target / "Handler.py").write_text("from shared.logger import logging_func\n\nlogger = logging_func(__name__)\n\n\nclass H:\n    def run(self) -> str:\n        return 'ok'\n")
+        (target / "Controller.py").write_text("from fastapi import APIRouter\nfrom shared.logger import logging_func\n\nlogger = logging_func(__name__)\nrouter = APIRouter()\n")
+        (target / "Tests.py").write_text("from shared.logger import logging_func\n\nlogger = logging_func(__name__)\n\n\ndef test_pass() -> None:\n    assert True\n")
+
+        monkeypatch.setattr(rr, "run_pytest", lambda path: (True, "PASSED"))
+        expected = {"Schema.py", "Handler.py", "Controller.py", "Tests.py"}
+        ok, err = rr.verify_target_files(target, tmp_path, expected)
+        assert ok is True
+        assert err == ""
+
+    def test_verify_target_files_missing_canonical(self, tmp_path: Path) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (target / "Schema.py").write_text("class S:\n    pass\n")
+        expected = {"Schema.py", "Handler.py"}
+        ok, err = rr.verify_target_files(target, tmp_path, expected)
+        assert ok is False
+        assert "Missing canonical files" in err
+
+    def test_verify_target_files_constitution_violation(self, tmp_path: Path) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        # Comment in code violates constitution rule 6
+        (target / "Schema.py").write_text("# A comment\nclass S:\n    pass\n")
+        expected = {"Schema.py"}
+        ok, err = rr.verify_target_files(target, tmp_path, expected)
+        assert ok is False
+        assert "Violations:" in err
+
+    def test_verify_target_files_pytest_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        (target / "Schema.py").write_text("from pydantic import BaseModel\n\n\nclass S(BaseModel):\n    pass\n")
+        (target / "Tests.py").write_text("from shared.logger import logging_func\n\nlogger = logging_func(__name__)\n\n\ndef test_fail() -> None:\n    assert False\n")
+
+        monkeypatch.setattr(rr, "run_pytest", lambda path: (False, "FAILED Tests.py::test_fail"))
+        expected = {"Schema.py", "Tests.py"}
+        ok, err = rr.verify_target_files(target, tmp_path, expected)
+        assert ok is False
+        assert "Pytest verification failed" in err
+
+
+class TestAutoBackendInteractiveExhaustion:
+    def test_auto_backend_non_interactive_aborts_on_exhaustion(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        monkeypatch.setattr(rr, "call_llm", lambda *a, **k: '{"Schema.py": "class S:\\n    pass\\n"}')
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+
+        ok = rr.auto_backend(target, "prompt", interactive=False)
+        assert ok is False
+
+    def test_auto_backend_interactive_quit_aborts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        monkeypatch.setattr(rr, "call_llm", lambda *a, **k: '{"Schema.py": "class S:\\n    pass\\n"}')
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+
+        inputs = iter(["q"])
+        ok = rr.auto_backend(target, "prompt", interactive=True, stdin_fn=lambda _: next(inputs))
+        assert ok is False
+
+    def test_auto_backend_interactive_retry_succeeds_on_attempt_4(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        schema = "from pydantic import BaseModel\\n\\n\\nclass S(BaseModel):\\n    pass\\n"
+        handler = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\nclass H:\\n    def run(self) -> str:\\n        return \\\"ok\\\"\\n"
+        controller = "from fastapi import APIRouter\\n\\nfrom shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\nrouter = APIRouter()\\n"
+        tests_fail = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\ndef test_x() -> None:\\n    assert False\\n"
+        tests_pass = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\ndef test_x() -> None:\\n    assert True\\n"
+
+        failing_output = (
+            '{"Schema.py": "' + schema + '", '
+            '"Handler.py": "' + handler + '", '
+            '"Controller.py": "' + controller + '", '
+            '"Tests.py": "' + tests_fail + '"}'
+        )
+        passing_output = (
+            '{"Tests.py": "' + tests_pass + '"}'
+        )
+
+        call_count = 0
+        received_prompts: list[str] = []
+
+        def fake_call_llm(prompt: str, persona: str = "", **kwargs: object) -> str:
+            nonlocal call_count
+            call_count += 1
+            received_prompts.append(prompt)
+            if call_count <= 3:
+                return failing_output
+            return passing_output
+
+        def fake_run_pytest(test_path: Path) -> tuple[bool, str]:
+            if "assert False" in test_path.read_text():
+                return False, "FAILED Tests.py::test_x"
+            return True, "PASSED"
+
+        monkeypatch.setattr(rr, "call_llm", fake_call_llm)
+        monkeypatch.setattr(rr, "run_pytest", fake_run_pytest)
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+
+        inputs = iter(["r", "make the assertion True"])
+        ok = rr.auto_backend(target, "prompt", interactive=True, stdin_fn=lambda _: next(inputs))
+
+        assert ok is True
+        assert call_count == 4
+        assert "Developer Guidance" in received_prompts[-1]
+        assert "make the assertion True" in received_prompts[-1]
+
+    def test_auto_backend_interactive_verify_reprompt_and_succeed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        (tmp_path / ".python-version").write_text("3.12\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        schema = "from pydantic import BaseModel\\n\\n\\nclass S(BaseModel):\\n    pass\\n"
+        handler = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\nclass H:\\n    def run(self) -> str:\\n        return \\\"ok\\\"\\n"
+        controller = "from fastapi import APIRouter\\n\\nfrom shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\nrouter = APIRouter()\\n"
+        tests_fail = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\ndef test_x() -> None:\\n    assert False\\n"
+
+        failing_output = (
+            '{"Schema.py": "' + schema + '", '
+            '"Handler.py": "' + handler + '", '
+            '"Controller.py": "' + controller + '", '
+            '"Tests.py": "' + tests_fail + '"}'
+        )
+
+        monkeypatch.setattr(rr, "call_llm", lambda *a, **k: failing_output)
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+
+        def fake_run_pytest(test_path: Path) -> tuple[bool, str]:
+            if "assert False" in test_path.read_text():
+                return False, "FAILED Tests.py::test_x"
+            return True, "PASSED"
+
+        monkeypatch.setattr(rr, "run_pytest", fake_run_pytest)
+
+        first_attempt = True
+
+        def interactive_input(_: str) -> str:
+            nonlocal first_attempt
+            if first_attempt:
+                first_attempt = False
+                return "v"
+            (target / "Tests.py").write_text(
+                "from shared.logger import logging_func\n\nlogger = logging_func(__name__)\n\n\ndef test_x() -> None:\n    assert True\n"
+            )
+            return "v"
+
+        ok = rr.auto_backend(target, "prompt", interactive=True, stdin_fn=interactive_input)
+        assert ok is True
+        assert "assert True" in (target / "Tests.py").read_text()

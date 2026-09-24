@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 REPO_ROOT = Path.cwd()
 VERBOSE = False
@@ -532,6 +533,82 @@ def run_pytest(test_path: Path) -> tuple[bool, str]:
     return passed, output
 
 
+def verify_target_files(
+    target: Path,
+    repo_root: Path,
+    expected: set[str],
+) -> tuple[bool, str]:
+    """Run static validation and pytest on current files on disk."""
+    disk_files = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
+    missing = expected - disk_files
+    if missing:
+        return False, f"Missing canonical files: {missing}."
+
+    all_py = [p for p in target.iterdir() if p.is_file() and p.suffix == ".py" and not p.name.startswith("__")]
+    bad = truncated_files(all_py)
+    if bad:
+        return False, f"Files appear truncated: {bad}."
+
+    struct_issues: list[str] = []
+    for w in all_py:
+        struct_issues.extend(validate_code_structure(w.read_text(), w.name))
+    std_violations = validate_code_standards(all_py)
+    const_violations = validate_constitution(repo_root, target)
+    pep8_violations = validate_pep8(repo_root, target)
+    all_violations = struct_issues + std_violations + const_violations + pep8_violations
+    if all_violations:
+        return False, "Violations:\n  " + "\n  ".join(all_violations)
+
+    test_file = target / "Tests.py"
+    if test_file.exists():
+        passed, test_output = run_pytest(test_file)
+        if not passed:
+            failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
+            return False, f"Pytest verification failed:\n{failure_summary.strip()}"
+
+    return True, ""
+
+
+def handle_interactive_fallback(
+    target: Path,
+    last_error: str,
+    stdin_fn: Callable[[str], str] | None = None,
+) -> tuple[str, str]:
+    """Prompt developer for next action when automated attempts exhaust.
+
+    Returns:
+        (action, hint)
+        action: 'retry', 'verify', or 'quit'
+    """
+    _input = stdin_fn if stdin_fn is not None else input
+    print("\n" + "=" * 60, file=sys.stderr)
+    print("[Runner] Automated attempts exhausted.", file=sys.stderr)
+    if last_error:
+        print(f"[Runner] Last error:\n{last_error.strip()}", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    print("Options:", file=sys.stderr)
+    print("  [r] Retry with additional developer guidance / hint", file=sys.stderr)
+    print("  [v] Re-verify current files on disk (after manual editing)", file=sys.stderr)
+    print("  [q] Quit and leave current files in place (default)", file=sys.stderr)
+    sys.stderr.flush()
+    sys.stdout.flush()
+
+    try:
+        choice = _input("Choice [r/v/q]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "quit", ""
+
+    if choice == "r":
+        try:
+            hint = _input("Enter developer hint / instruction for LLM: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            hint = ""
+        return "retry", hint
+    elif choice == "v":
+        return "verify", ""
+    return "quit", ""
+
+
 def auto_backend(
     target: Path,
     prompt: str,
@@ -542,6 +619,8 @@ def auto_backend(
     no_controller: bool = False,
     allow_auxiliary: bool = True,
     expected: set[str] | frozenset[str] | list[str] | None = None,
+    interactive: bool = True,
+    stdin_fn: Callable[[str], str] | None = None,
 ) -> bool:
     if expected is not None:
         expected_set = set(expected)
@@ -557,14 +636,18 @@ def auto_backend(
 
     last_error: str = ""
     written: list[Path] = []
-    for attempt in range(1, 4):
+    attempt = 0
+    max_auto_attempts = 3
+    while True:
+        attempt += 1
         t_attempt = time.time()
-        print(f"[Runner] LLM attempt {attempt}/3...")
+        print(f"[Runner] LLM attempt {attempt}...")
         if last_error:
             response = call_llm(build_retry_prompt(target, last_error), persona=persona, max_attempts=max_attempts)
         else:
             response = call_llm(prompt, persona=persona, max_attempts=max_attempts)
         files = extract_code_blocks(response)
+        has_failed = False
         if files:
             current_protect = protected_extra | known_files
             new_written, _ = write_code_blocks(
@@ -579,69 +662,98 @@ def auto_backend(
             if not written and any(parse_search_replace_blocks(c) for c in files.values()):
                 last_error = "Failed to apply patch blocks to target files. Ensure SEARCH blocks match existing file content exactly or provide complete files."
                 print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
-                continue
+                has_failed = True
         else:
             written = [p for p in target.iterdir() if p.suffix == ".py" and p.name in (expected | known_files)]
             files = {p.name: p.read_text() for p in written}
             if not written:
                 last_error = "No code blocks found in LLM response and no files written to the target directory."
                 print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
-                continue
+                has_failed = True
 
-        for w in written:
-            print(f"[Runner] Inspecting {w}")
-        bad = truncated_files(written)
-        if bad:
-            for p in written:
-                if p.name in bad:
-                    p.unlink()
-            last_error = f"Files appear truncated: {bad}. Regenerate complete code."
-            print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
+        if not has_failed:
+            for w in written:
+                print(f"[Runner] Inspecting {w}")
+            bad = truncated_files(written)
+            if bad:
+                for p in written:
+                    if p.name in bad:
+                        p.unlink()
+                last_error = f"Files appear truncated: {bad}. Regenerate complete code."
+                print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
+                has_failed = True
+
+        if not has_failed:
+            struct_issues: list[str] = []
+            for w in written:
+                struct_issues.extend(validate_code_structure(w.read_text(), w.name))
+            std_violations = validate_code_standards(written)
+            const_violations = validate_constitution(REPO_ROOT, target)
+            pep8_violations = validate_pep8(REPO_ROOT, target)
+            all_violations = struct_issues + std_violations + const_violations + pep8_violations
+            t_elapsed = time.time() - t_attempt
+            if all_violations:
+                last_error = "Violations:\n  " + "\n  ".join(all_violations)
+                print(f"[Runner] {last_error}", file=sys.stderr)
+
+            disk_files = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
+            missing = expected - disk_files
+            if missing:
+                last_error = f"Missing canonical files: {missing}. Must include ALL {len(expected)} canonical files."
+                print(f"[Runner] {last_error} Retrying... ({t_elapsed:.1f}s)", file=sys.stderr)
+                has_failed = True
+            elif all_violations:
+                print(f"[Runner] Retrying after violations ({t_elapsed:.1f}s)...", file=sys.stderr)
+                has_failed = True
+
+        if not has_failed:
+            test_file = target / "Tests.py"
+            if not test_file.exists():
+                last_error = ""
+                print(f"[Runner] Attempt {attempt} OK (no Tests.py found) ({time.time() - t_attempt:.1f}s)")
+                break
+
+            print(f"[Runner] Running tests for {target.name} (attempt {attempt})...")
+            passed, test_output = run_pytest(test_file)
+            if not passed:
+                failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
+                last_error = f"Pytest verification failed:\n{failure_summary.strip()}"
+                print(f"[Runner] Tests failed on attempt {attempt}. Retrying with error feedback...", file=sys.stderr)
+                has_failed = True
+            else:
+                last_error = ""
+                print(f"[Runner] Attempt {attempt} OK & All Tests Passed ({time.time() - t_attempt:.1f}s)")
+                break
+
+        if attempt >= max_auto_attempts:
+            is_interactive = interactive and (sys.stdin.isatty() or stdin_fn is not None)
+            if not is_interactive:
+                total = time.time() - t_total
+                print(f"[Runner] Failed after {attempt} attempts ({total:.1f}s total).", file=sys.stderr)
+                return False
+
+            while True:
+                action, hint = handle_interactive_fallback(target, last_error, stdin_fn=stdin_fn)
+                if action == "retry":
+                    last_error = f"{last_error}\n\n## Developer Guidance\n{hint}" if hint else last_error
+                    break
+                elif action == "verify":
+                    print(f"[Runner] Re-verifying {target.name} after manual edits...")
+                    v_ok, v_err = verify_target_files(target, REPO_ROOT, expected)
+                    if v_ok:
+                        print(f"[Runner] Manual verification PASSED ({time.time() - t_total:.1f}s total)")
+                        has_failed = False
+                        break
+                    last_error = v_err
+                    print(f"[Runner] {last_error}", file=sys.stderr)
+                else:
+                    total = time.time() - t_total
+                    print(f"[Runner] Aborted by developer after {attempt} attempts ({total:.1f}s total).", file=sys.stderr)
+                    return False
+
+            if not has_failed:
+                break
             continue
-
-        struct_issues: list[str] = []
-        for w in written:
-            struct_issues.extend(validate_code_structure(w.read_text(), w.name))
-        std_violations = validate_code_standards(written)
-        const_violations = validate_constitution(REPO_ROOT, target)
-        pep8_violations = validate_pep8(REPO_ROOT, target)
-        all_violations = struct_issues + std_violations + const_violations + pep8_violations
-        t_elapsed = time.time() - t_attempt
-        if all_violations:
-            last_error = "Violations:\n  " + "\n  ".join(all_violations)
-            print(f"[Runner] {last_error}", file=sys.stderr)
-
-        disk_files = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
-        missing = expected - disk_files
-        if missing:
-            last_error = f"Missing canonical files: {missing}. Must include ALL {len(expected)} canonical files."
-            print(f"[Runner] {last_error} Retrying... ({t_elapsed:.1f}s)", file=sys.stderr)
-            continue
-        if all_violations:
-            print(f"[Runner] Retrying after violations ({t_elapsed:.1f}s)...", file=sys.stderr)
-            continue
-
-        test_file = target / "Tests.py"
-        if not test_file.exists():
-            last_error = ""
-            print(f"[Runner] Attempt {attempt} OK (no Tests.py found) ({t_elapsed:.1f}s)")
-            break
-
-        print(f"[Runner] Running tests for {target.name} (attempt {attempt})...")
-        passed, test_output = run_pytest(test_file)
-        if not passed:
-            failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
-            last_error = f"Pytest verification failed:\n{failure_summary.strip()}"
-            print(f"[Runner] Tests failed on attempt {attempt}. Retrying with error feedback...", file=sys.stderr)
-            continue
-
-        last_error = ""
-        print(f"[Runner] Attempt {attempt} OK & All Tests Passed ({t_elapsed:.1f}s)")
-        break
-    else:
-        total = time.time() - t_total
-        print(f"[Runner] Failed after 3 attempts ({total:.1f}s total).", file=sys.stderr)
-        return False
 
     spec_path = target / "spec.md"
     if spec_path.exists():
@@ -667,6 +779,7 @@ def run() -> None:
     parser.add_argument("--max-attempts", type=int, default=0, help="Maximum LLM model-chain attempts; 0 = try every discovered free model (default: 0)")
     parser.add_argument("--no-controller", action="store_true", help="Skip Controller.py requirement")
     parser.add_argument("--no-auxiliary", action="store_true", help="Disallow auxiliary non-canonical .py files")
+    parser.add_argument("--no-interactive", action="store_true", help="Disable interactive fallback on attempt exhaustion")
     parser.add_argument("--canonical", help="Comma-separated list of expected canonical files (e.g. Schema.py,Handler.py,Tests.py)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full prompt and response to stderr")
     args = parser.parse_args()
@@ -723,6 +836,7 @@ def run() -> None:
         no_controller=args.no_controller,
         allow_auxiliary=not args.no_auxiliary,
         expected=expected_files,
+        interactive=not args.no_interactive,
     )
     if not ok:
         sys.exit(1)

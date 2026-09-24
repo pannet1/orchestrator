@@ -129,8 +129,12 @@ Global flags (parsed in `orch.py`):
 5. On failure of any static gate OR pytest, the loop re-runs with the error output
    (including stack traces and assertion failures) fed back to the LLM; the LLM
    can return single-file fixes or search/replace patches without resending
-   unchanged files. If still failing after 3 attempts, `run_runner` returns failure
-   and `do` tells the user to inspect the output.
+   unchanged files. If still failing after 3 attempts in an interactive terminal,
+   `runner.py` drops into an interactive fallback allowing the developer to:
+   - `[r]` Retry with additional developer guidance / hint appended to the prompt for the next LLM attempt.
+   - `[v]` Re-verify current files on disk (runs static gates + pytest after manual developer editing).
+   - `[q]` Quit and leave current files in place for inspection.
+   In non-interactive environments (or with `--no-interactive`), `run_runner` returns failure immediately.
 
 Only when all gates and tests pass does `do` commit (`feat: <Name>`, staging both
 the feature directory and `.features.json`) and push the branch — **it never merges**.
