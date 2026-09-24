@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
+RULES_DIR = Path(__file__).resolve().parent / "rules"
 
 LANG_BY_EXT: dict[str, str] = {
     ".py": "python",
@@ -52,9 +52,11 @@ class Violation:
 
 
 def load_rules(lang: str) -> list[dict]:
-    """Load (and cache) `<RULES_DIR>/<lang>/core.json`; missing file => no rules."""
+    """Load (and cache) `<RULES_DIR>/<lang>.json` or `<RULES_DIR>/<lang>/core.json`."""
     if lang not in _cache:
-        rule_file = RULES_DIR / lang / "core.json"
+        rule_file = RULES_DIR / f"{lang}.json"
+        if not rule_file.exists():
+            rule_file = RULES_DIR / lang / "core.json"
         checks: list[dict] = []
         if rule_file.exists():
             try:

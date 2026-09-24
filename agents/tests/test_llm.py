@@ -3,11 +3,11 @@ from __future__ import annotations
 import io
 import json
 import os
-
-import pytest
 from unittest.mock import patch
 
-from _orchestrator.llm import (
+import pytest
+
+from agents.llm import (
     LOCAL_FALLBACK,
     PROVIDER_PREFERENCE,
     _is_free,
@@ -97,7 +97,7 @@ class TestLiveDiscovery:
 
     def test_query_provider_models_parses_table(self) -> None:
         fake_result = type("R", (), {"stdout": FAKE_LIST_MODELS, "returncode": 0})()
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
+        with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("subprocess.run", return_value=fake_result):
             ids = query_provider_models(force=True)
         assert "opencode/nemotron-3-ultra-free" in ids
@@ -117,7 +117,7 @@ class TestLiveDiscovery:
 
     def test_free_model_ids_orders_by_provider_and_appends_local(self) -> None:
         fake_result = type("R", (), {"stdout": FAKE_LIST_MODELS, "returncode": 0})()
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
+        with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("subprocess.run", return_value=fake_result):
             free = free_model_ids(force=True)
         # opencode (preferred) before openrouter
@@ -129,7 +129,7 @@ class TestLiveDiscovery:
 
     def test_free_model_ids_falls_back_when_discovery_empty(self) -> None:
         fake_result = type("R", (), {"stdout": "", "returncode": 0})()
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
+        with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("subprocess.run", return_value=fake_result):
             free = free_model_ids(force=True)
         assert free[-1] == LOCAL_FALLBACK
@@ -140,7 +140,7 @@ class TestModelChain:
 
     @pytest.fixture(autouse=True)
     def _patch_free(self):
-        with patch("_orchestrator.llm.free_model_ids", return_value=list(FAKE_FREE)):
+        with patch("agents.llm.free_model_ids", return_value=list(FAKE_FREE)):
             yield
 
     def test_explicit_free_model_leads_chain(self) -> None:
@@ -181,13 +181,13 @@ class TestLlmCompleteModelFallback:
 
     @pytest.fixture(autouse=True)
     def _patch_free(self):
-        with patch("_orchestrator.llm.free_model_ids", return_value=list(FAKE_FREE)):
+        with patch("agents.llm.free_model_ids", return_value=list(FAKE_FREE)):
             yield
 
     def test_failure_advances_to_next_model(self) -> None:
         fake_popen, calls = _fake_popen({"openrouter/poolside/laguna-s-2.1:free": "actual content"})
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
-                patch("_orchestrator.llm.subprocess.Popen", fake_popen):
+        with patch("agents.llm._pi_binary", return_value="pi"), \
+                patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result == "actual content"
         assert calls[0] == "opencode/nemotron-3-ultra-free"
@@ -195,8 +195,8 @@ class TestLlmCompleteModelFallback:
 
     def test_empty_model_not_retried(self) -> None:
         fake_popen, calls = _fake_popen({})
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
-                patch("_orchestrator.llm.subprocess.Popen", fake_popen):
+        with patch("agents.llm._pi_binary", return_value="pi"), \
+                patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result is None
         assert calls == ["opencode/nemotron-3-ultra-free", "openrouter/poolside/laguna-s-2.1:free", "openrouter/cohere/north-mini-code:free"]
@@ -206,8 +206,8 @@ class TestLlmCompleteModelFallback:
             {"openrouter/poolside/laguna-s-2.1:free": "recovered output"},
             error_models={"opencode/nemotron-3-ultra-free"},
         )
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
-                patch("_orchestrator.llm.subprocess.Popen", fake_popen):
+        with patch("agents.llm._pi_binary", return_value="pi"), \
+                patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result == "recovered output"
         assert calls[0] == "opencode/nemotron-3-ultra-free"
@@ -221,24 +221,48 @@ class TestLlmCompleteModelFallback:
                 return FakePopen(stderr_text="429 Rate limit exceeded\n", returncode=1)
             return FakePopen(stdout_text=_ndjson("success after rate limit"), returncode=0)
 
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
-                patch("_orchestrator.llm.subprocess.Popen", fake_popen_rl):
+        with patch("agents.llm._pi_binary", return_value="pi"), \
+                patch("agents.llm.subprocess.Popen", fake_popen_rl):
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result == "success after rate limit"
 
     def test_all_models_retried_once(self) -> None:
         """Every model in the chain gets exactly one attempt, never repeated."""
         fake_popen, calls = _fake_popen({LOCAL_FALLBACK: "local fallback wins"})
-        with patch("_orchestrator.llm._pi_binary", return_value="pi"), \
-                patch("_orchestrator.llm.subprocess.Popen", fake_popen):
+        with patch("agents.llm._pi_binary", return_value="pi"), \
+                patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", max_attempts=0)
         assert result == "local fallback wins"
         # No duplicates — each model tried exactly once
         assert len(calls) == len(set(calls)), f"Duplicate models in call sequence: {calls}"
         # Full discovered chain (includes default_model if set)
         assert calls == _model_chain(default_model(), 0)
-        # llama-swap is always the last resort
         assert calls[-1] == LOCAL_FALLBACK
+
+
+class TestDetectError:
+    def test_detect_error_on_stderr_matches_rate_limit(self) -> None:
+        from agents.llm import _detect_error
+
+        is_err, reason = _detect_error("HTTP 429 Too Many Requests", is_stderr=True)
+        assert is_err is True
+        assert "rate limit" in reason
+
+    def test_detect_error_on_stdout_ignores_generated_code(self) -> None:
+        from agents.llm import _detect_error
+
+        # Generated code discussing rate limits or status 429 must NOT trigger an error abort
+        code_line = 'if response.status_code == 429: raise Exception("rate limit")'
+        is_err, _ = _detect_error(code_line, is_stderr=False)
+        assert is_err is False
+
+    def test_detect_error_on_stdout_catches_json_error_events(self) -> None:
+        from agents.llm import _detect_error
+
+        err_json = json.dumps({"type": "error", "message": "model overloaded"})
+        is_err, reason = _detect_error(err_json, is_stderr=False)
+        assert is_err is True
+        assert "model overloaded" in reason
 
 
 @pytest.mark.integration

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from _orchestrator.feature import (
+from agents.feature import (
     ProjectFeatures,
     discover_config,
     feature_from_branch,

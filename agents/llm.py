@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from .config import AGENTS_DIR, MODEL_CONFIG, REPO_ROOT
 
@@ -239,7 +238,7 @@ def _stop_reason(ndjson: str) -> str:
     return f" (stopReason={reason})" if reason else ""
 
 
-def _detect_error(line: str) -> tuple[bool, str]:
+def _detect_error(line: str, is_stderr: bool = False) -> tuple[bool, str]:
     """Check if an output line (from stdout event or stderr) indicates an error or rate limit."""
     line_str = line.strip()
     if not line_str:
@@ -261,20 +260,21 @@ def _detect_error(line: str) -> tuple[bool, str]:
                 stop_reason = ev.get("message", {}).get("stopReason", "")
                 if stop_reason in ("error", "abort"):
                     return True, f"stopReason={stop_reason}"
-            # Standard pi JSON event without error fields
+            # Standard pi JSON event without error fields; do not run text heuristics on event payloads
             return False, ""
     except (json.JSONDecodeError, ValueError):
         pass
 
-    lower = line_str.lower()
-    if "429" in line_str or "rate limit" in lower or "ratelimit" in lower:
-        return True, f"rate limit: {line_str[:120]}"
-    if "error from provider" in lower:
-        return True, f"provider error: {line_str[:120]}"
-    if "insufficient_quota" in lower or "quota exceeded" in lower:
-        return True, "quota exceeded"
-    if "unauthorized" in lower or "authentication error" in lower:
-        return True, "auth error"
+    if is_stderr:
+        lower = line_str.lower()
+        if "429" in line_str or "rate limit" in lower or "ratelimit" in lower:
+            return True, f"rate limit: {line_str[:120]}"
+        if "error from provider" in lower:
+            return True, f"provider error: {line_str[:120]}"
+        if "insufficient_quota" in lower or "quota exceeded" in lower:
+            return True, "quota exceeded"
+        if "unauthorized" in lower or "authentication error" in lower:
+            return True, "auth error"
 
     return False, ""
 
@@ -499,7 +499,7 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
                     stderr_lines.append(line_str)
                     formatter.format_stderr_line(line_str)
 
-                is_err, reason = _detect_error(line_str)
+                is_err, reason = _detect_error(line_str, is_stderr=(stream != proc.stdout))
                 if is_err:
                     error_encountered = True
                     error_reason = reason
@@ -531,7 +531,7 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
                 if line_str:
                     stdout_lines.append(line_str)
                     formatter.format_stdout_event(line_str)
-                    is_err, reason = _detect_error(line_str)
+                    is_err, reason = _detect_error(line_str, is_stderr=False)
                     if is_err:
                         error_encountered = True
                         error_reason = reason
@@ -541,7 +541,7 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
                 if line_str:
                     stderr_lines.append(line_str)
                     formatter.format_stderr_line(line_str)
-                    is_err, reason = _detect_error(line_str)
+                    is_err, reason = _detect_error(line_str, is_stderr=True)
                     if is_err:
                         error_encountered = True
                         error_reason = reason

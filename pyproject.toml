@@ -6,7 +6,12 @@ requires-python = ">=3.12"
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
-files = ["_orchestrator", "orch.py"]
+files = ["agents"]
 
 [tool.ruff]
 exclude = ["__pycache__", ".venv", "features"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

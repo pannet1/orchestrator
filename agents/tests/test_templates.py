@@ -1,4 +1,4 @@
-from _orchestrator.templates import CODE_TEMPLATES, DEFAULT_OVERVIEW, SPEC_TEMPLATE
+from agents.templates import CODE_TEMPLATES, DEFAULT_OVERVIEW, SPEC_TEMPLATE
 
 
 class TestSpecTemplate:

@@ -1,10 +1,10 @@
-"""Tests for _orchestrator/runner.py — file pruning protection and prompt context."""
+"""Tests for agents/runner.py — file pruning protection and prompt context."""
 
 from pathlib import Path
 
 import pytest
 
-import _orchestrator.runner as rr
+import agents.runner as rr
 
 # ── collect_target_files ───────────────────────────────────────────
 
@@ -189,3 +189,65 @@ class TestAutoBackendProtection:
         assert (target / "test_Feature.py").exists()
         for name in rr.FEATURE_CANONICAL:
             assert (target / name).exists()
+
+    def test_pytest_failure_retries_and_recovers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+        for name in rr.FEATURE_CANONICAL:
+            (target / name).write_text("# old\n")
+
+        llm_prompts: list[str] = []
+
+        def fake_call_llm(prompt: str, persona: str = "", **kwargs: object) -> str:
+            llm_prompts.append(prompt)
+            return self._llm_output()
+
+        call_count = 0
+
+        def fake_run_pytest(test_path: Path) -> tuple[bool, str]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return False, "FAILED Tests.py::test_x - AssertionError"
+            return True, "PASSED Tests.py::test_x"
+
+        monkeypatch.setattr(rr, "call_llm", fake_call_llm)
+        monkeypatch.setattr(rr, "run_pytest", fake_run_pytest)
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+        (tmp_path / ".python-version").write_text("3.13\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        ok = rr.auto_backend(target, "prompt", persona="p")
+
+        assert ok is True
+        assert call_count == 2
+        assert len(llm_prompts) == 2
+        assert "Pytest verification failed" in llm_prompts[1]
+        assert "AssertionError" in llm_prompts[1]
+
+    def test_auto_backend_no_controller_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "Feature"
+        target.mkdir()
+
+        schema = "from pydantic import BaseModel\\n\\n\\nclass S(BaseModel):\\n    pass\\n"
+        handler = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\nclass H:\\n    def run(self) -> str:\\n        return \\\"ok\\\"\\n"
+        tests = "from shared.logger import logging_func\\n\\nlogger = logging_func(__name__)\\n\\n\\ndef test_x() -> None:\\n    assert True\\n"
+        no_ctrl_output = (
+            '{"Schema.py": "' + schema + '", '
+            '"Handler.py": "' + handler + '", '
+            '"Tests.py": "' + tests + '"}'
+        )
+
+        monkeypatch.setattr(rr, "call_llm", lambda prompt, persona="", **kwargs: no_ctrl_output)
+        monkeypatch.setattr(rr, "run_pytest", lambda test_path: (True, ""))
+        monkeypatch.setattr(rr, "REPO_ROOT", tmp_path)
+        (tmp_path / ".python-version").write_text("3.13\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\nversion = '0.1.0'\n")
+
+        ok = rr.auto_backend(target, "prompt", persona="p", no_controller=True)
+
+        assert ok is True
+        assert (target / "Schema.py").exists()
+        assert (target / "Handler.py").exists()
+        assert (target / "Tests.py").exists()
+        assert not (target / "Controller.py").exists()

@@ -1,8 +1,8 @@
-"""Tests for the shared rules registry (_orchestrator/rules.py + agents/rules/)."""
+"""Tests for the shared rules registry (agents/rules.py + agents/rules/)."""
 
 from pathlib import Path
 
-from _orchestrator import rules
+from agents import rules
 
 
 def _check(text: str, name: str = "Handler.py", groups: set[str] | None = None) -> list[rules.Violation]:

@@ -61,6 +61,9 @@ def merge_branch(branch: str) -> tuple[bool, str]:
     for label, cmd in steps:
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT), check=False)
         if result.returncode != 0:
+            if label == "merge":
+                subprocess.run(["git", "merge", "--abort"], cwd=str(REPO_ROOT), check=False)
+                subprocess.run(["git", "checkout", branch], cwd=str(REPO_ROOT), check=False)
             return False, f"git {label} failed: {result.stderr.strip()}"
         if result.stdout.strip():
             print(result.stdout.strip())

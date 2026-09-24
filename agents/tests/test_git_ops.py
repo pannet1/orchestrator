@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from _orchestrator.git_ops import (
+from agents.git_ops import (
     branch_exists,
     current_branch,
     ensure_branch,
@@ -22,19 +22,19 @@ class TestReadPromptFile:
     def test_reads_prompt_file(self, tmp_path: Path) -> None:
         prompt = tmp_path / "my_prompt.md"
         prompt.write_text("implement this feature")
-        with patch("_orchestrator.git_ops.REPO_ROOT", tmp_path):
+        with patch("agents.git_ops.REPO_ROOT", tmp_path):
             result = read_prompt_file("my_prompt.md")
         assert result == "implement this feature"
 
     def test_reads_strips_whitespace(self, tmp_path: Path) -> None:
         prompt = tmp_path / "my_prompt.md"
         prompt.write_text("  implement this feature  \n")
-        with patch("_orchestrator.git_ops.REPO_ROOT", tmp_path):
+        with patch("agents.git_ops.REPO_ROOT", tmp_path):
             result = read_prompt_file("my_prompt.md")
         assert result == "implement this feature"
 
     def test_exits_on_missing_file(self, tmp_path: Path) -> None:
-        with patch("_orchestrator.git_ops.REPO_ROOT", tmp_path), pytest.raises(SystemExit):
+        with patch("agents.git_ops.REPO_ROOT", tmp_path), pytest.raises(SystemExit):
             read_prompt_file("nonexistent.md")
 
 
@@ -67,21 +67,21 @@ class TestOpenBranches:
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             return type("R", (), {"returncode": 0, "stdout": "main\nauction/SubmitBid\nmodify/Users\n", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         assert open_branches() == ["auction/SubmitBid", "modify/Users"]
 
     def test_empty_when_only_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             return type("R", (), {"returncode": 0, "stdout": "main\n", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         assert open_branches() == []
 
     def test_returns_empty_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             raise subprocess.SubprocessError("git not found")
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         assert open_branches() == []
 
 
@@ -89,14 +89,14 @@ class TestEnsureBranch:
 
     def _run(self, monkeypatch: pytest.MonkeyPatch, branch: str, exists: bool) -> list[list[str]]:
         calls: list[list[str]] = []
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: branch)
-        monkeypatch.setattr("_orchestrator.git_ops.branch_exists", lambda name: exists)
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: branch)
+        monkeypatch.setattr("agents.git_ops.branch_exists", lambda name: exists)
 
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             calls.append(cmd)
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         return calls
 
     def test_creates_branch_from_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,7 +131,7 @@ class TestStageAndCommit:
             rc, out, err = next(it)
             return type("R", (), {"returncode": rc, "stdout": out, "stderr": err})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         return calls
 
     def test_stages_and_commits(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,7 +163,7 @@ class TestPushBranch:
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         ok, err = push_branch("shared/Payment")
         assert ok is True
         assert err == ""
@@ -172,7 +172,7 @@ class TestPushBranch:
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             return type("R", (), {"returncode": 128, "stdout": "", "stderr": "remote rejected"})
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         ok, err = push_branch("shared/Payment")
         assert ok is False
         assert err == "remote rejected"
@@ -187,7 +187,7 @@ class TestResetToMain:
             calls.append(cmd)
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         ok, err = reset_to_main()
         assert ok is True
         assert err == ""
@@ -203,7 +203,7 @@ class TestResetToMain:
             rc = 1 if cmd[:2] == ["git", "checkout"] else 0
             return type("R", (), {"returncode": rc, "stdout": "", "stderr": "checkout failed"})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         ok, err = reset_to_main()
         assert ok is False
         assert "git checkout main failed" in err
@@ -221,7 +221,7 @@ class TestMergeBranch:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": f"boom at step {len(calls) - 1}"})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         return calls
 
     def test_runs_full_pipeline_and_deletes_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -250,7 +250,13 @@ class TestMergeBranch:
         ok, err = merge_branch("shared/Payment")
         assert ok is False
         assert "git merge failed" in err
-        assert [c[:2] for c in calls] == [["git", "push"], ["git", "checkout"], ["git", "merge"]]
+        assert [c[:2] for c in calls] == [
+            ["git", "push"],
+            ["git", "checkout"],
+            ["git", "merge"],
+            ["git", "merge"],
+            ["git", "checkout"],
+        ]
 
     def test_still_deletes_branch_when_merge_succeeds_after_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = self._fake_run(monkeypatch, failures={3})

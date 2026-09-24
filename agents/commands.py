@@ -166,35 +166,63 @@ def _cmd_qa(project: ProjectFeatures) -> CommandResult:
             continue
         all_violations.extend(_qa_audit_file(py_file))
 
-    n_features = 0
+    features_to_test: list[tuple[str, str, Path, Path]] = []
+    seen_features: set[str] = set()
     for name, domain in sorted(project.known_features.items()):
         feat_dir = project.root_for_domain(domain) / domain / name if domain else project.root_for_domain(domain) / name
         test_file = feat_dir / "Tests.py"
         if not test_file.exists():
             continue
-        n_features += 1
-        print(f"  [{domain}/{name}]")
+        features_to_test.append((domain, name, feat_dir, test_file))
+        seen_features.add(name)
 
+    if hasattr(project, "scan"):
+        try:
+            for t in project.scan():
+                if t.name not in seen_features:
+                    test_file = t.dir / "Tests.py"
+                    if test_file.exists():
+                        features_to_test.append((t.domain, t.name, t.dir, test_file))
+                        seen_features.add(t.name)
+        except Exception:
+            pass
+
+    n_features = len(features_to_test)
+
+    for domain, name, feat_dir, test_file in features_to_test:
         if feat_dir.is_dir():
             for py_file in sorted(feat_dir.glob("*.py")):
                 all_violations.extend(_qa_audit_file(py_file))
 
+    if features_to_test:
+        test_paths = [str(tf) for _, _, _, tf in features_to_test]
         result = subprocess.run(
-            ["uv", "run", "pytest", str(test_file), "-v"],
+            ["uv", "run", "pytest", *test_paths, "-v"],
             capture_output=True, text=True,
-            cwd=str(REPO_ROOT), timeout=120,
+            cwd=str(REPO_ROOT), timeout=180,
             check=False,
         )
-        for line in result.stdout.splitlines():
-            if " PASSED" in line:
-                t = line.split("::")[-1].replace(" PASSED", "").strip()
-                print(f"    PASS  {t}")
-                all_passed.append(f"      {domain}/{name} :: {t}")
-            elif " FAILED" in line:
-                t = line.split("::")[-1].replace(" FAILED", "").strip()
-                print(f"    FAIL  {t}")
-                all_failed.append(f"      {domain}/{name} :: {t}")
-        print()
+        lines = result.stdout.splitlines()
+        for domain, name, _, _ in features_to_test:
+            print(f"  [{domain}/{name}]")
+            for line in lines:
+                is_match = (
+                    f"/{name}/" in line
+                    or f"{name}::" in line
+                    or f"::{name}" in line
+                    or (n_features == 1 and "::" in line)
+                )
+                if not is_match:
+                    continue
+                if " PASSED" in line:
+                    test_name = line.split("::")[-1].replace(" PASSED", "").strip()
+                    print(f"    PASS  {test_name}")
+                    all_passed.append(f"      {domain}/{name} :: {test_name}")
+                elif " FAILED" in line:
+                    test_name = line.split("::")[-1].replace(" FAILED", "").strip()
+                    print(f"    FAIL  {test_name}")
+                    all_failed.append(f"      {domain}/{name} :: {test_name}")
+            print()
 
     print("=" * 50)
     print(" Code Standards Violations")
@@ -271,15 +299,18 @@ def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> Co
         task = f"Implement {display} per its spec.md"
     commit_type = "feat"
 
-    print(f"[Orchestrator] Generating code for {display}...")
-    ok = run_runner("backend", feature_dir, task, max_attempts=max_attempts)
+    has_controller = (feature_dir / "Controller.py").exists()
+    ok = run_runner("backend", feature_dir, task, max_attempts=max_attempts, no_controller=not has_controller)
     if ok:
         register_target(target)
         print(f"\n{'='*60}\nALL TESTS PASSED.\n")
-        print(f"[Orchestrator] Staging {feature_dir}...")
+        paths_to_stage = [str(feature_dir)]
+        if target.config_path.exists():
+            paths_to_stage.append(str(target.config_path))
+        print(f"[Orchestrator] Staging {paths_to_stage}...")
         msg_body = f"{commit_type}: {display}"
         print(f"[Orchestrator] Committing: {msg_body}")
-        ok, detail = stage_and_commit([str(feature_dir)], msg_body)
+        ok, detail = stage_and_commit(paths_to_stage, msg_body)
         if not ok:
             print(f"[Orchestrator] {detail}")
             print("You may need to commit and merge manually.")

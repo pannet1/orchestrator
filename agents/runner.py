@@ -23,16 +23,24 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 REPO_ROOT = Path.cwd()
 VERBOSE = False
 FEATURE_CANONICAL = {"Schema.py", "Handler.py", "Controller.py", "Tests.py"}
 
+try:
+    from agents import rules
+    from agents.llm import llm_complete
+except ImportError:
+    try:
+        from . import rules
+        from .llm import llm_complete
+    except ImportError:
+        import rules  # type: ignore[no-redef]
+        from llm import llm_complete  # type: ignore[no-redef]
+
 
 def _complete(prompt: str, persona: str = "", max_attempts: int = 0) -> str | None:
-    from _orchestrator.llm import llm_complete
-
     return llm_complete(prompt, system=persona, max_attempts=max_attempts)
 
 
@@ -204,9 +212,7 @@ def write_code_blocks(files: dict[str, str], target: Path, protect: set[str] | N
 
 
 def validate_code_standards(written: list[Path]) -> list[str]:
-    """Per-file standards gates, driven by agents/rules/python/core.json (group 'standards')."""
-    from _orchestrator import rules
-
+    """Per-file standards gates, driven by agents/rules/python.json (group 'standards')."""
     violations: list[str] = []
     for p in written:
         if not p.exists() or p.suffix != ".py":
@@ -244,8 +250,9 @@ def validate_constitution(repo_root: Path, target: Path) -> list[str]:
         issues.append("requirements.txt not permitted (use pyproject.toml + uv)")
 
     # 5. Project time library only — check imports in generated code
-    # Detect the project's designated time library from existing code
-    existing_files = list(repo_root.rglob("*.py"))
+    # Detect the project's designated time library from existing code (ignore .venv/caches)
+    ignored_parts = {".venv", "venv", "env", "node_modules", "__pycache__", ".git", ".mypy_cache", ".ruff_cache"}
+    existing_files = [f for f in repo_root.rglob("*.py") if not any(p in ignored_parts for p in f.parts)]
     time_libs = {"pendulum", "arrow", "python-dateutil", "delorean", "maya", "udatetime", "pytz"}
     project_time_lib: str = ""
     for f in existing_files:
@@ -342,8 +349,6 @@ def truncated_files(written: list[Path]) -> list[str]:
 
 def validate_code_structure(code: str, fname: str) -> list[str]:
     """Structural gates (group 'structure') via the shared rules registry."""
-    from _orchestrator import rules
-
     return [v.message for v in rules.check_text(code, fname, groups={"structure"})]
 
 
@@ -388,8 +393,16 @@ def run_pytest(test_path: Path) -> tuple[bool, str]:
     return passed, output
 
 
-def auto_backend(target: Path, prompt: str, verbose: bool = False, persona: str = "", spec: str = "", max_attempts: int = 0) -> bool:
-    expected = FEATURE_CANONICAL
+def auto_backend(
+    target: Path,
+    prompt: str,
+    verbose: bool = False,
+    persona: str = "",
+    spec: str = "",
+    max_attempts: int = 0,
+    no_controller: bool = False,
+) -> bool:
+    expected = FEATURE_CANONICAL - {"Controller.py"} if no_controller else FEATURE_CANONICAL
     pre_existing = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
     protected_extra = pre_existing - expected
     t_total = time.time()
@@ -436,43 +449,46 @@ def auto_backend(target: Path, prompt: str, verbose: bool = False, persona: str 
             print(f"[Runner] {last_error}", file=sys.stderr)
         missing = expected - set(files.keys())
         if missing:
-            last_error = f"Missing files: {missing}. Must include ALL 4 files."
+            last_error = f"Missing files: {missing}. Must include ALL {len(expected)} files."
             print(f"[Runner] {last_error} Retrying... ({t_elapsed:.1f}s)", file=sys.stderr)
             continue
-        if not all_violations and not missing:
+        if all_violations:
+            print(f"[Runner] Retrying after violations ({t_elapsed:.1f}s)...", file=sys.stderr)
+            continue
+
+        test_file = target / "Tests.py"
+        if not test_file.exists():
             last_error = ""
-            print(f"[Runner] Attempt {attempt} OK ({t_elapsed:.1f}s)", file=sys.stderr)
+            print(f"[Runner] Attempt {attempt} OK (no Tests.py found) ({t_elapsed:.1f}s)")
             break
+
+        print(f"[Runner] Running tests for {target.name} (attempt {attempt})...")
+        passed, test_output = run_pytest(test_file)
+        if not passed:
+            failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
+            last_error = f"Pytest verification failed:\n{failure_summary.strip()}"
+            print(f"[Runner] Tests failed on attempt {attempt}. Retrying with error feedback...", file=sys.stderr)
+            continue
+
+        last_error = ""
+        print(f"[Runner] Attempt {attempt} OK & All Tests Passed ({t_elapsed:.1f}s)")
+        break
     else:
         total = time.time() - t_total
         print(f"[Runner] Failed after 3 attempts ({total:.1f}s total).", file=sys.stderr)
         return False
 
-    test_file = target / "Tests.py"
-    if not test_file.exists():
-        total = time.time() - t_total
-        print(f"[Runner] No Tests.py found, skipping auto-QA ({total:.1f}s total).")
-        return True
-
-    print(f"[Runner] Running tests for {target.name}...")
-    passed, _ = run_pytest(test_file)
-    total = time.time() - t_total
-    if passed:
-        print(f"[Runner] All Tests Passed ({total:.1f}s total).")
-        spec_path = target / "spec.md"
-        if spec_path.exists():
-            spec = spec_path.read_text()
-            m = re.search(r"## Modification Request\n(.+?)(?=\n## |\Z)", spec, re.DOTALL)
-            if m:
-                print(f"\n{'='*60}")
-                print("EXTRACTION INSTRUCTIONS (from spec.md)")
-                print(f"{'='*60}")
-                print(m.group(1).strip())
-                print(f"{'='*60}\n")
-        return True
-
-    print("[Runner] Tests failed. Generated code does not pass. ESCALATE to human.")
-    return False
+    spec_path = target / "spec.md"
+    if spec_path.exists():
+        spec_text = spec_path.read_text()
+        m = re.search(r"## Modification Request\n(.+?)(?=\n## |\Z)", spec_text, re.DOTALL)
+        if m:
+            print(f"\n{'='*60}")
+            print("EXTRACTION INSTRUCTIONS (from spec.md)")
+            print(f"{'='*60}")
+            print(m.group(1).strip())
+            print(f"{'='*60}\n")
+    return True
 
 
 def run() -> None:
@@ -484,6 +500,7 @@ def run() -> None:
     parser.add_argument("--api", action="store_true", help="Auto mode: call opencode, write files, run tests")
     parser.add_argument("--prompt-only", action="store_true", help="Print prompt to stdout only (no API call)")
     parser.add_argument("--max-attempts", type=int, default=0, help="Maximum LLM model-chain attempts; 0 = try every discovered free model (default: 0)")
+    parser.add_argument("--no-controller", action="store_true", help="Skip Controller.py requirement")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full prompt and response to stderr")
     args = parser.parse_args()
     if args.verbose:
@@ -514,7 +531,15 @@ def run() -> None:
         return
 
     spec = target_files.get("spec.md", "")
-    ok = auto_backend(args.target, prompt, verbose=args.verbose, persona=persona, spec=spec, max_attempts=args.max_attempts)
+    ok = auto_backend(
+        args.target,
+        prompt,
+        verbose=args.verbose,
+        persona=persona,
+        spec=spec,
+        max_attempts=args.max_attempts,
+        no_controller=args.no_controller,
+    )
     if not ok:
         sys.exit(1)
 

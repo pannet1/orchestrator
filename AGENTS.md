@@ -12,12 +12,12 @@ spec + code, then implements it with an LLM sub-agent and a git
 **branch-per-feature** workflow.
 
 - Entry point: `agents/orch.py` (this repo's `agents/` dir).
-- All command logic lives in `agents/_orchestrator/commands.py::dispatch()`.
+- All command logic lives in `agents/commands.py::dispatch()`.
 - LLM work is done by shelling out to the **`pi` binary** (`pi -p --mode json`)
   — not a direct API call. The model chain/config is in `agents/model_chain.json` /
   `agents/model_config.json`.
 - Git is **never** shelled out by `commands.py` directly; every git operation
-  goes through `agents/_orchestrator/git_ops.py`.
+  goes through `agents/git_ops.py`.
 
 ## Mental model (read this before doing anything)
 
@@ -40,7 +40,7 @@ target project/
 - `REPO_ROOT = Path.cwd()`. The orchestrator operates on **whatever directory
   it is run from** (the target project), not on this repo. This repo is the
   *tool*; the project it orchestrates is the *target*.
-- `AGENTS_DIR` = this repo's `agents/` dir (the parent of `_orchestrator/`).
+- `AGENTS_DIR` = this repo's `agents/` dir.
   `model_config.json`, `model_chain.json`, `personas/`, and `rules/` all live
   here and are shared by every target project.
 - There is **no `.features.json` in this repo** — it is created inside each
@@ -48,10 +48,12 @@ target project/
 
 ## Creating a new project (the `init` step)
 
-`init` **creates a folder + a `.agents` symlink** (→ this repo's `agents/`)
-and `cd`s into it. It does **not** create `.features.json` and **ignores any
-prompt**. There is no per-project git repo — the new project lives inside
-this single git repository, so there is nothing to manage.
+`init` **creates a folder, a `.agents` symlink** (→ this repo's `agents/`),
+and scaffolds `.python-version`, `pyproject.toml`, and `shared/logger.py` so
+the project immediately passes the constitution and standard imports. It does
+**not** create `.features.json` and **ignores any prompt**. There is no
+per-project git repo — the new project lives inside this single git repository,
+so there is nothing to manage.
 
 ```bash
 # from anywhere
@@ -107,27 +109,30 @@ Global flags (parsed in `orch.py`):
 
 ## The `do` code-generation pipeline
 
-`launcher.run_runner("backend", feature_dir, task)` spawns `runner.py` as a
-subprocess with the `backend_agent.md` persona. Inside the loop:
+`launcher.run_runner("backend", feature_dir, task, no_controller=...)` spawns
+`runner.py` as a subprocess with the `backend_agent.md` persona. Inside the loop
+(up to 3 internal attempts):
 
 1. Read `spec.md` + task; collect existing files in the feature dir.
-2. LLM (`_orchestrator/llm.py`) returns code; extracted (prefers JSON, falls
+2. LLM (`agents/llm.py`) returns code; extracted (prefers JSON, falls
    back to markdown `### file` fences) and written, with pre-existing
    non-canonical files protected.
-3. QA gates (all must pass): structure, code standards (from
-   `rules/python/core.json`), the 11-rule **constitution**, PEP8
-   (E302/E501), no truncation, and **all 4 files present**.
-4. `pytest` on the feature's `Tests.py` must pass.
-5. On failure, the loop re-runs with the error output, up to 3 internal
-   attempts; if still failing, `run_runner` returns failure and `do` tells the
-   user to paste the output back to the AI.
+3. Static QA gates (all must pass): structure, code standards (from
+   `agents/rules/python.json`), the 11-rule **constitution**, PEP8
+   (E302/E501), no truncation, and canonical files present (`Schema.py`,
+   `Handler.py`, `Controller.py` unless `--no-controller`, and `Tests.py`).
+4. `pytest` on the feature's `Tests.py` is executed inside the attempt loop.
+5. On failure of any static gate OR pytest, the loop re-runs with the error output
+   (including stack traces and assertion failures) fed back to the LLM; if still
+   failing after 3 attempts, `run_runner` returns failure and `do` tells the
+   user to inspect the output.
 
-Only when all gates pass does `do` commit (`feat: <Name>`) and push the branch
-— **it never merges**.
+Only when all gates and tests pass does `do` commit (`feat: <Name>`, staging both
+the feature directory and `.features.json`) and push the branch — **it never merges**.
 
 ## Model selection
 
-- `_orchestrator/llm.py::llm_complete(prompt, system, model, timeout=300,
+- `agents/llm.py::llm_complete(prompt, system, model, timeout=300,
   max_attempts=0)` runs `pi -p --mode json --model <m>` and extracts the
   final assistant text from the JSONL event stream.
 - The free-model list is **queried live** from each provider via
@@ -157,7 +162,7 @@ Only when all gates pass does `do` commit (`feat: <Name>`) and push the branch
 ## Rules engine & Constitution (QA gates)
 
 `rules.py` classifies files by extension and runs declarative checks from
-`rules/python/core.json` (groups: `standards`, `structure`). Used by both
+`agents/rules/python.json` (groups: `standards`, `structure`). Used by both
 `orch.py qa` and `runner.py`. To add a check, edit that JSON — no code change.
 
 `runner.validate_constitution` enforces these 11 rules (the project
@@ -170,7 +175,7 @@ Only when all gates pass does `do` commit (`feat: <Name>`) and push the branch
 4. Use the project's designated time library (detected from existing code;
    default `pendulum`); no `arrow`/`python-dateutil`/`delorean`/`maya`/
    `udatetime`/`pytz` instead.
-5. Use `logging.getLogger` (per-file).
+5. Use `from shared.logger import logging_func` (per-file).
 6. **Zero comments** in code (per-file).
 7. No hardcoded secrets (`password`/`secret`/`token`/`api_key`/`access_token`
    with string values; test fixtures exempt).
@@ -178,7 +183,7 @@ Only when all gates pass does `do` commit (`feat: <Name>`) and push the branch
 9. Type annotations on return values (per-file).
 10. A `Tests.py` with unit tests must exist (structure group).
 11. All 4 canonical files (`Schema.py`, `Handler.py`, `Controller.py`,
-    `Tests.py`) present.
+    `Tests.py`) present (Controller skipped if `--no-controller`).
 
 ## Running this repo's own tests
 
@@ -186,7 +191,7 @@ The orchestrator is managed with **uv** (no `.venv`, no pip). From this repo
 root:
 
 ```bash
-uv run pytest _orchestrator/tests -q
+uv run pytest agents/tests -q
 ```
 
 This runs one suite: commands, feature, git, llm, templates, runner, rules.
@@ -195,8 +200,9 @@ This runs one suite: commands, feature, git, llm, templates, runner, rules.
 
 - Run `orch.py` **from inside the target project** (or pass a resolved path);
   `REPO_ROOT = cwd` determines where `.features.json` and `features/` live.
-- After `init`, the new project has a `.agents` symlink but **no**
-  `.features.json` — that appears only after the first `new`.
+- After `init`, the new project has a `.agents` symlink, `.python-version`,
+  `pyproject.toml`, and `shared/logger.py`, but **no** `.features.json` —
+  that appears only after the first `new`.
 - `merge`/`undo` take **no target**; they act on the current git branch. Don't
   pass one or the command aborts.
 - `do` commits + pushes but **does not merge**. Merging is a separate `merge`
@@ -212,20 +218,20 @@ This runs one suite: commands, feature, git, llm, templates, runner, rules.
 
 | Path | Role |
 |---|---|
-| `orch.py` | CLI: arg parsing, `--model` persistence, `dispatch()`. |
-| `_orchestrator/commands.py` | All command handlers + `domain/Feature` parsing. |
-| `_orchestrator/feature.py` | Feature resolution: `.features.json`, domains, targets, branch inference. Single owner of the registry. |
-| `_orchestrator/scaffold.py` | `scaffold_new_feature` (spec + 4 templates), `init_new_project` (folder + symlink). |
-| `_orchestrator/specs.py` | Spec generation/QA (`rewrite_spec_with_ai`, `amend_spec`, `_qa_spec`). |
-| `_orchestrator/git_ops.py` | **Every** git operation. `commands.py` never shells out to git itself. |
-| `_orchestrator/launcher.py` | Spawns `runner.py` with a persona. |
-| `_orchestrator/llm.py` | `pi`-based completions with the model chain. Sole owner of model selection. |
-| `_orchestrator/prompts.py` | Prompt resolution incl. current-file detection via `nvim --headless`. |
-| `_orchestrator/templates.py` | Code + spec templates, default overview. |
-| `_orchestrator/config.py` | Paths: `REPO_ROOT`, `AGENTS_DIR`, `PERSONAS_DIR`, `MODEL_CONFIG`; `load_persona()`. |
-| `_orchestrator/rules.py` | Rules engine — executes `rules/python/core.json` checks. |
-| `_orchestrator/runner.py` | Backend subprocess engine (never run by hand). |
-| `model_chain.json` | Optional pinned free models (tried first). Live provider discovery is the source of truth. |
-| `model_config.json` | `{"model": "..."}` persisted by `--model`. |
-| `personas/*.md` | `backend_agent.md` (used by `do`), `spec_qa_agent.md` (loaded via `load_persona`). |
-| `rules/python/core.json` | Declarative Python checks (line/text/ast/balanced kinds). |
+| `agents/orch.py` | CLI: arg parsing, `--model` persistence, `dispatch()`. |
+| `agents/commands.py` | All command handlers + `domain/Feature` parsing. |
+| `agents/feature.py` | Feature resolution: `.features.json`, domains, targets, branch inference. Single owner of the registry. |
+| `agents/scaffold.py` | `scaffold_new_feature` (spec + 4 templates), `init_new_project` (folder + symlink + baseline config). |
+| `agents/specs.py` | Spec generation/QA (`rewrite_spec_with_ai`, `amend_spec`, `_qa_spec`). |
+| `agents/git_ops.py` | **Every** git operation. `commands.py` never shells out to git itself. |
+| `agents/launcher.py` | Spawns `runner.py` with a persona. |
+| `agents/llm.py` | `pi`-based completions with the model chain. Sole owner of model selection. |
+| `agents/prompts.py` | Prompt resolution incl. current-file detection via `nvim --headless`. |
+| `agents/templates.py` | Code + spec templates, default overview. |
+| `agents/config.py` | Paths: `REPO_ROOT`, `AGENTS_DIR`, `PERSONAS_DIR`, `MODEL_CONFIG`; `load_persona()`. |
+| `agents/rules.py` | Rules engine — executes `agents/rules/python.json` checks. |
+| `agents/runner.py` | Backend subprocess engine (never run by hand). |
+| `agents/model_chain.json` | Optional pinned free models (tried first). Live provider discovery is the source of truth. |
+| `agents/model_config.json` | `{"model": "..."}` persisted by `--model`. |
+| `agents/personas/*.md` | `backend_agent.md` (used by `do`), `spec_qa_agent.md` (loaded via `load_persona`). |
+| `agents/rules/python.json` | Declarative Python checks (line/text/ast/balanced kinds). |

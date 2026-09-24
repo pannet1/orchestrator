@@ -4,8 +4,18 @@ import json
 import sys
 from pathlib import Path
 
-from _orchestrator.commands import dispatch
-from _orchestrator.config import MODEL_CONFIG
+_agents_dir = Path(__file__).resolve().parent
+_repo_dir = _agents_dir.parent
+for _p in (str(_repo_dir), str(_agents_dir)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+try:
+    from agents.commands import dispatch
+    from agents.config import MODEL_CONFIG
+except ImportError:
+    from commands import dispatch  # type: ignore[no-redef]
+    from config import MODEL_CONFIG  # type: ignore[no-redef]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

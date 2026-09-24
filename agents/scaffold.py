@@ -81,5 +81,26 @@ def init_new_project(project_dir: Path) -> bool:
         py_ver_file.write_text("3.13\n")
         print("  .python-version -> 3.13")
 
+    # Constitution rule #2 requires a uv-managed pyproject.toml
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.exists():
+        pyproject.write_text(
+            f'[project]\nname = "{project_dir.name.lower()}"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        )
+        print("  pyproject.toml -> uv-managed")
+
+    # Scaffold minimal shared/logger.py so feature imports succeed out of the box
+    shared_dir = project_dir / "shared"
+    logger_file = shared_dir / "logger.py"
+    if not logger_file.exists():
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        (shared_dir / "__init__.py").touch()
+        logger_file.write_text(
+            "import logging\n\n\n"
+            "def logging_func(name: str) -> logging.Logger:\n"
+            "    return logging.getLogger(name)\n"
+        )
+        print("  shared/logger.py -> logging_func scaffolded")
+
     print(f"[Orchestrator] Project ready at {project_dir}")
     return True

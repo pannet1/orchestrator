@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from _orchestrator.commands import _KNOWN_PREFIXES, _cmd_do, _cmd_qa, _parse_request, dispatch
-from _orchestrator.feature import ProjectFeatures, feature_from_branch
-from _orchestrator.git_ops import check_branch
-from _orchestrator.scaffold import scaffold_new_feature
+from agents.commands import _KNOWN_PREFIXES, _cmd_do, _cmd_qa, _parse_request, dispatch
+from agents.feature import ProjectFeatures, feature_from_branch
+from agents.git_ops import check_branch
+from agents.scaffold import scaffold_new_feature
 
 
 class FakeProject:
@@ -97,27 +97,27 @@ class TestFeatureFromBranch:
 class TestDoDeleteInferFromBranch:
 
     def test_do_without_target_on_feature_branch(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "feature/Payment")
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "feature/Payment")
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         dispatch("do")
         assert "Feature not found: Payment" in capsys.readouterr().out
 
     def test_do_without_target_on_main(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "main")
         dispatch("do")
         assert "cannot infer from current branch" in capsys.readouterr().out
 
     def test_delete_without_target_on_modify_branch(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "shared/Payment")
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
-        monkeypatch.setattr("_orchestrator.commands.branch_exists", lambda name: False)
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "shared/Payment")
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.branch_exists", lambda name: False)
         calls: list[list[str]] = []
 
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             calls.append(cmd)
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         dispatch("delete")
         out = capsys.readouterr().out
         assert "Nothing to delete: feature 'Payment' not found." in out
@@ -131,15 +131,15 @@ class TestMoveHandler:
         (tmp_path / "features" / "shared" / "Payment" / "spec.md").touch()
         cfg = tmp_path / ".features.json"
         cfg.write_text(json.dumps({"known_features": known}))
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: ProjectFeatures.load(tmp_path))
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: ProjectFeatures.load(tmp_path))
 
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.commands.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.commands.subprocess.run", fake_run)
         # handle the pytest run (uv) in commands and all git calls in git_ops
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "main")
 
     def test_move_within_domain(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch_env(tmp_path, monkeypatch, {"Payment": "shared"})
@@ -162,7 +162,7 @@ class TestMoveHandler:
         assert data["known_features"] == {"Payments": "vps"}
 
     def test_move_missing_target_usage(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         dispatch("move Payment")
         assert "Usage: move <OldDomain/OldFeature> <NewDomain/NewFeature>" in capsys.readouterr().out
 
@@ -201,37 +201,37 @@ class TestCheckBranchNaming:
             calls.append(cmd)
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         return calls
 
     def test_branch_uses_domain_slash_feature(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: "main")
-        monkeypatch.setattr("_orchestrator.git_ops.open_branches", list)
-        monkeypatch.setattr("_orchestrator.git_ops.branch_exists", lambda name: False)
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.git_ops.open_branches", list)
+        monkeypatch.setattr("agents.git_ops.branch_exists", lambda name: False)
         calls = self._fake_git(monkeypatch)
         check_branch("Payment", "shared")
         assert ["git", "checkout", "-b", "shared/Payment"] in calls
 
     def test_branch_without_domain_is_bare_feature(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: "main")
-        monkeypatch.setattr("_orchestrator.git_ops.open_branches", list)
-        monkeypatch.setattr("_orchestrator.git_ops.branch_exists", lambda name: False)
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.git_ops.open_branches", list)
+        monkeypatch.setattr("agents.git_ops.branch_exists", lambda name: False)
         calls = self._fake_git(monkeypatch)
         check_branch("Payments", "")
         assert ["git", "checkout", "-b", "Payments"] in calls
 
     def test_branch_for_bare_feature_uses_nodomain(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: "main")
-        monkeypatch.setattr("_orchestrator.git_ops.open_branches", list)
-        monkeypatch.setattr("_orchestrator.git_ops.branch_exists", lambda name: False)
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.git_ops.open_branches", list)
+        monkeypatch.setattr("agents.git_ops.branch_exists", lambda name: False)
         calls = self._fake_git(monkeypatch)
         check_branch("Payments", "nodomain")
         assert ["git", "checkout", "-b", "nodomain/Payments"] in calls
 
     def test_no_operation_prefix_in_branch_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: "main")
-        monkeypatch.setattr("_orchestrator.git_ops.open_branches", list)
-        monkeypatch.setattr("_orchestrator.git_ops.branch_exists", lambda name: False)
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.git_ops.open_branches", list)
+        monkeypatch.setattr("agents.git_ops.branch_exists", lambda name: False)
         calls = self._fake_git(monkeypatch)
         check_branch("Payment", "shared")
         created = [c for c in calls if c[:3] == ["git", "checkout", "-b"]]
@@ -241,13 +241,13 @@ class TestCheckBranchNaming:
                 assert not name.startswith(("feature/", "modify/"))
 
     def test_already_on_any_branch_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: "shared/Payment")
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: "shared/Payment")
         with pytest.raises(SystemExit):
             check_branch("Other", "vps")
 
     def test_any_open_branch_blocks_even_if_merged(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-        monkeypatch.setattr("_orchestrator.git_ops.current_branch", lambda: "main")
-        monkeypatch.setattr("_orchestrator.git_ops.open_branches", lambda: ["modify/Users"])
+        monkeypatch.setattr("agents.git_ops.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.git_ops.open_branches", lambda: ["modify/Users"])
         with pytest.raises(SystemExit):
             check_branch("Payment", "shared")
         assert "Other branches are open" in capsys.readouterr().out
@@ -265,10 +265,10 @@ class TestDoPushesWithoutMerge:
             calls.append(cmd)
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "auction/SubmitBid")
-        monkeypatch.setattr("_orchestrator.commands.run_runner", lambda *a, **k: True)
-        monkeypatch.setattr("_orchestrator.commands.register_target", lambda *a, **k: None)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "auction/SubmitBid")
+        monkeypatch.setattr("agents.commands.run_runner", lambda *a, **k: True)
+        monkeypatch.setattr("agents.commands.register_target", lambda *a, **k: None)
 
         result = _cmd_do(target, "SubmitBid")
 
@@ -283,23 +283,23 @@ class TestDoPushesWithoutMerge:
 class TestMergeGuard:
 
     def test_merge_on_main_aborts(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "main")
         dispatch("merge")
         out = capsys.readouterr().out
         assert "Checkout a feature branch before running merge" in out
 
     def test_merge_main_variant_aborts(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "main*")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "main*")
         dispatch("merge")
         assert "Checkout a feature branch before running merge" in capsys.readouterr().out
 
     def test_merge_detached_head_aborts(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "")
         dispatch("merge")
         assert "Detached HEAD" in capsys.readouterr().out
 
     def test_merge_with_target_on_feature_branch_aborts(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "modify/Payment")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "modify/Payment")
         dispatch("merge shared/Payment")
         assert "merge takes no target" in capsys.readouterr().out
 
@@ -307,29 +307,29 @@ class TestMergeGuard:
 class TestUndoHandler:
 
     def test_undo_on_main_aborts(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "main")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "main")
         dispatch("undo")
         assert "Checkout a feature branch before running undo" in capsys.readouterr().out
 
     def test_undo_detached_head_aborts(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "")
         dispatch("undo")
         assert "Detached HEAD" in capsys.readouterr().out
 
     def test_undo_with_target_rejected(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "shared/Payment")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "shared/Payment")
         dispatch("undo shared/Payment")
         assert "undo takes no target" in capsys.readouterr().out
 
     def test_undo_resets_branch_to_main(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.current_branch", lambda: "shared/Payment")
+        monkeypatch.setattr("agents.commands.current_branch", lambda: "shared/Payment")
         calls: list[list[str]] = []
 
         def fake_run(cmd: list[str], **kwargs: object) -> object:
             calls.append(cmd)
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr("_orchestrator.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.git_ops.subprocess.run", fake_run)
         dispatch("undo")
         out = capsys.readouterr().out
         assert ["git", "fetch", "origin"] in calls
@@ -344,29 +344,32 @@ class TestUndoHandler:
 class TestInitHandler:
 
     def test_bare_init_fails(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         dispatch("init")
         assert "init requires a project target" in capsys.readouterr().out
 
     def test_init_without_path_fails(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         dispatch('init MyProject "python fastapi"')
         assert "init requires a project target" in capsys.readouterr().out
 
     def test_init_creates_folder_and_agents_symlink(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         monkeypatch.chdir(tmp_path)
         dispatch("init mypath/MyProject")
         proj = tmp_path / "mypath" / "MyProject"
         assert proj.is_dir()
         assert (proj / ".agents").is_symlink()
+        assert (proj / ".python-version").exists()
+        assert (proj / "pyproject.toml").exists()
+        assert (proj / "shared" / "logger.py").exists()
         assert not (proj / ".features.json").exists()
         assert not (proj / "features").is_dir()
         assert not (proj / "SPEC.md").exists()
         assert Path.cwd() == proj
 
     def test_init_ignores_prompt_argument(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         monkeypatch.chdir(tmp_path)
         dispatch('init mypath/MyProject "Python 3.13, FastAPI, Vue 3"')
         proj = tmp_path / "mypath" / "MyProject"
@@ -377,7 +380,7 @@ class TestInitHandler:
         assert Path.cwd() == proj
 
     def test_init_absolute_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("_orchestrator.commands.load_project", lambda repo: FakeProject())
+        monkeypatch.setattr("agents.commands.load_project", lambda repo: FakeProject())
         target = tmp_path / "abs" / "Proj"
         dispatch(f"init {target}")
         assert target.is_dir()
@@ -409,7 +412,7 @@ class TestQaHandler:
     ) -> str:
         features_root = tmp_path / "features"
         project = FakeQaProject(known, features_root)
-        monkeypatch.setattr("_orchestrator.commands.REPO_ROOT", tmp_path)
+        monkeypatch.setattr("agents.commands.REPO_ROOT", tmp_path)
 
         class FakeResult:
             def __init__(self, stdout: str, returncode: int) -> None:
@@ -417,10 +420,10 @@ class TestQaHandler:
                 self.returncode = returncode
 
         monkeypatch.setattr(
-            "_orchestrator.commands.subprocess.run",
+            "agents.commands.subprocess.run",
             lambda *a, **k: FakeResult(pytest_stdout, pytest_rc),
         )
-        result = _cmd_qa(project)
+        result = _cmd_qa(project)  # type: ignore[arg-type]
         assert result.success == (pytest_rc == 0)
         return capsys.readouterr().out
 
@@ -460,6 +463,43 @@ class TestQaHandler:
         out = self._run_qa(tmp_path, capsys, monkeypatch, known={"SubmitBid": "auction"})
         assert "[auction/SubmitBid]" not in out
         assert "0 feature slices" in out
+
+    def test_qa_batches_multiple_features(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+        feat1 = tmp_path / "features" / "auction" / "SubmitBid"
+        feat1.mkdir(parents=True)
+        (feat1 / "Tests.py").write_text("def test_bid():\n    assert True\n")
+        feat2 = tmp_path / "features" / "shared" / "Payment"
+        feat2.mkdir(parents=True)
+        (feat2 / "Tests.py").write_text("def test_pay():\n    assert True\n")
+
+        subprocess_calls: list[list[str]] = []
+
+        class FakeResult:
+            def __init__(self, stdout: str, returncode: int) -> None:
+                self.stdout = stdout
+                self.returncode = returncode
+
+        def fake_run(cmd: list[str], *args: object, **kwargs: object) -> FakeResult:
+            subprocess_calls.append(cmd)
+            stdout = (
+                "features/auction/SubmitBid/Tests.py::test_bid PASSED\n"
+                "features/shared/Payment/Tests.py::test_pay PASSED\n"
+            )
+            return FakeResult(stdout, 0)
+
+        monkeypatch.setattr("agents.commands.subprocess.run", fake_run)
+        monkeypatch.setattr("agents.commands.REPO_ROOT", tmp_path)
+        project = FakeQaProject({"SubmitBid": "auction", "Payment": "shared"}, tmp_path / "features")
+        result = _cmd_qa(project)  # type: ignore[arg-type]
+
+        assert result.success is True
+        assert len(subprocess_calls) == 1
+        assert str(feat1 / "Tests.py") in subprocess_calls[0]
+        assert str(feat2 / "Tests.py") in subprocess_calls[0]
+        out = capsys.readouterr().out
+        assert "[auction/SubmitBid]" in out
+        assert "[shared/Payment]" in out
+        assert "2 passed, 0 failed" in out
 
 
 class TestKnownPrefixes:
