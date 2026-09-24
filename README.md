@@ -88,14 +88,16 @@ language file). No code changes required.
 
 1. Read spec.md + task; collect existing files in the feature dir.
 2. Few-shot prompt: built from working features in the same domain.
-3. LLM (via `agents/llm.py`) returns code; extracted and written,
-   protected files preserved.
+3. LLM (via `agents/llm.py`) returns code; extracted and written (supports
+   both full-file rewrites and targeted `SEARCH/REPLACE` patch blocks; auxiliary
+   modules and pre-existing files preserved).
 4. QA gates: code standards, unused imports, AGENTS.md constitution (11
    rules), root-file checks, PEP8, truncation, structure, canonical files
    (`Schema.py`, `Handler.py`, `Controller.py` unless `--no-controller`, `Tests.py`);
    then `pytest` on the feature's tests inside the retry loop.
 5. On failure of any gate or test, loop re-runs with the error output
-   (`auto_backend`), exhausting attempts before returning failure.
+   (`auto_backend`), enabling targeted single-file or patch repairs before
+   exhausting attempts.
 
 Only when all gates and tests pass does `do` commit (`feat: <Name>`, staging both
 the feature directory and `.features.json`) and push.

@@ -115,17 +115,20 @@ Global flags (parsed in `orch.py`):
 
 1. Read `spec.md` + task; collect existing files in the feature dir.
 2. LLM (`agents/llm.py`) returns code; extracted (prefers JSON, falls
-   back to markdown `### file` fences) and written, with pre-existing
-   non-canonical files protected.
+   back to markdown `### file` fences). Supports full files as well as
+   targeted `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` patch blocks.
+   Pre-existing and newly produced auxiliary `.py` modules are preserved
+   across retries.
 3. Static QA gates (all must pass): structure, code standards (from
    `agents/rules/python.json`), the 11-rule **constitution**, PEP8
    (E302/E501), no truncation, and canonical files present (`Schema.py`,
    `Handler.py`, `Controller.py` unless `--no-controller`, and `Tests.py`).
 4. `pytest` on the feature's `Tests.py` is executed inside the attempt loop.
 5. On failure of any static gate OR pytest, the loop re-runs with the error output
-   (including stack traces and assertion failures) fed back to the LLM; if still
-   failing after 3 attempts, `run_runner` returns failure and `do` tells the
-   user to inspect the output.
+   (including stack traces and assertion failures) fed back to the LLM; the LLM
+   can return single-file fixes or search/replace patches without resending
+   unchanged files. If still failing after 3 attempts, `run_runner` returns failure
+   and `do` tells the user to inspect the output.
 
 Only when all gates and tests pass does `do` commit (`feat: <Name>`, staging both
 the feature directory and `.features.json`) and push the branch — **it never merges**.

@@ -99,9 +99,9 @@ def build_retry_prompt(target: Path, last_error: str) -> str:
     return (
         f"## Target Directory\n{target}\n\n"
         "## Task\n"
-        "Fix the violations below using your tools, like a normal coding session: read spec.md and the "
-        "current files in the target directory, fix them, then re-run "
-        "`uv run pytest <target>/Tests.py` until it passes. "
+        "Fix the violations below. You may return complete updated files (JSON or markdown) or targeted "
+        "SEARCH/REPLACE blocks (<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE) for only the files "
+        "that need changes. Unchanged files already on disk do not need to be resent.\n"
         "Never modify files outside the target directory; never commit or push.\n\n"
         f"## Previous Feedback\n{last_error}"
     )
@@ -118,6 +118,93 @@ def call_llm(prompt: str, persona: str = "", max_attempts: int = 0) -> str:
 def _unescape(text: str) -> str:
     return text.replace("\\n", "\n")
 
+
+def parse_search_replace_blocks(patch_text: str) -> list[tuple[str, str]]:
+    """Parse <<<<<<< SEARCH ... ======= ... >>>>>>> [REPLACE] blocks from patch text."""
+    blocks: list[tuple[str, str]] = []
+    lines = patch_text.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if line.startswith("<" * 5) and "SEARCH" in line:
+            search_lines: list[str] = []
+            replace_lines: list[str] = []
+            i += 1
+            while i < n and not lines[i].strip().startswith("=" * 5):
+                search_lines.append(lines[i])
+                i += 1
+            if i >= n:
+                break
+            i += 1  # Skip ======= line
+            while i < n and not lines[i].strip().startswith(">" * 5):
+                replace_lines.append(lines[i])
+                i += 1
+            if i < n:
+                i += 1  # Skip >>>>>>> line
+            blocks.append(("\n".join(search_lines), "\n".join(replace_lines)))
+        else:
+            i += 1
+    return blocks
+
+
+def apply_search_replace_blocks(original_content: str, patch_text: str) -> tuple[str, bool, list[str]]:
+    """Apply SEARCH/REPLACE blocks to original_content.
+
+    Returns:
+        (updated_content, was_applied, list_of_errors)
+    """
+    blocks = parse_search_replace_blocks(patch_text)
+    if not blocks:
+        return original_content, False, []
+
+    content = original_content
+    errors: list[str] = []
+
+    for idx, (search_str, replace_str) in enumerate(blocks, start=1):
+        if not search_str:
+            if content and not content.endswith("\n"):
+                content += "\n"
+            content += replace_str
+            continue
+
+        if search_str in content:
+            if replace_str == "" and search_str + "\n" in content:
+                content = content.replace(search_str + "\n", "", 1)
+            else:
+                content = content.replace(search_str, replace_str, 1)
+            continue
+
+        search_lines = [l.rstrip() for l in search_str.splitlines()]
+        content_lines = content.splitlines()
+        found = False
+        k = len(search_lines)
+        if k <= len(content_lines):
+            for start in range(len(content_lines) - k + 1):
+                if [l.rstrip() for l in content_lines[start : start + k]] == search_lines:
+                    new_lines = content_lines[:start] + replace_str.splitlines() + content_lines[start + k:]
+                    has_trailing_nl = content.endswith("\n")
+                    content = "\n".join(new_lines)
+                    if has_trailing_nl and not content.endswith("\n"):
+                        content += "\n"
+                    found = True
+                    break
+
+        if found:
+            continue
+
+        stripped_search = search_str.strip()
+        if stripped_search and stripped_search in content:
+            content = content.replace(stripped_search, replace_str.strip(), 1)
+            continue
+
+        preview = search_str[:80].replace("\n", "\\n")
+        errors.append(f"Block {idx}: search text not found: '{preview}'")
+
+    applied = len(errors) < len(blocks)
+    return content, applied, errors
+
+
 def strip_preamble(text: str) -> str:
     idx = text.find("{")
     if idx < 0:
@@ -128,6 +215,7 @@ def strip_preamble(text: str) -> str:
             print(f"[Runner] Stripped {len(before)} chars of preamble from response", file=sys.stderr)
         text = text[idx:]
     return text
+
 
 def extract_code_blocks(text: str) -> dict[str, str]:
     files: dict[str, str] = {}
@@ -140,9 +228,9 @@ def extract_code_blocks(text: str) -> dict[str, str]:
         return {k: _unescape(v) for k, v in files.items()}
 
     # Fallback: markdown patterns
-    # Pattern 1: ### filename\n```python ... ```
+    # Pattern 1: ### filename\n```python/diff/patch ... ```
     pattern1 = re.compile(
-        r'^###\s+(\S+)\s*\n```python\n(.*?)```',
+        r'^###\s+(\S+)\s*\n```(?:python|diff|patch)?\n(.*?)```',
         re.MULTILINE | re.DOTALL
     )
     for match in pattern1.finditer(text):
@@ -151,9 +239,9 @@ def extract_code_blocks(text: str) -> dict[str, str]:
         if fname and code:
             files[fname] = _unescape(code)
 
-    # Pattern 2: ## `path/to/filename` ... ```python ... ```
+    # Pattern 2: ## `path/to/filename` ... ```python/diff/patch ... ```
     pattern2 = re.compile(
-        r'^##\s+`[^`]+/(\S+)`\s*\n.*?```python\n(.*?)```',
+        r'^##\s+`[^`]+/(\S+)`\s*\n.*?```(?:python|diff|patch)?\n(.*?)```',
         re.MULTILINE | re.DOTALL
     )
     for match in pattern2.finditer(text):
@@ -162,9 +250,20 @@ def extract_code_blocks(text: str) -> dict[str, str]:
         if fname and code and fname not in files:
             files[fname] = _unescape(code)
 
-    # Pattern 3: any ```python ... ``` block preceded by a filename somewhere nearby
+    # Pattern 3: ###/## filename.py followed directly by SEARCH/REPLACE blocks (no markdown fence)
+    pattern3 = re.compile(
+        r'^#{2,3}\s+(?:`?[^`\n]+/)?(\S+\.py)`?\s*\n\s*(<{5,9}\s*SEARCH.*?>{5,9}(?:[^\r\n]*))',
+        re.MULTILINE | re.DOTALL
+    )
+    for match in pattern3.finditer(text):
+        fname = match.group(1)
+        code = match.group(2).strip()
+        if fname and code and fname not in files:
+            files[fname] = _unescape(code)
+
+    # Pattern 4: any ```python/diff/patch ... ``` block preceded by a filename somewhere nearby
     if not files:
-        blocks = re.split(r'```(?:python)?\n', text)
+        blocks = re.split(r'```(?:python|diff|patch)?\n', text)
         for i in range(1, len(blocks), 2):
             code = blocks[i].strip()
             if code.endswith("```"):
@@ -179,20 +278,51 @@ def extract_code_blocks(text: str) -> dict[str, str]:
     return files
 
 
-def write_code_blocks(files: dict[str, str], target: Path, protect: set[str] | None = None) -> tuple[list[Path], list[Path]]:
+def write_code_blocks(
+    files: dict[str, str],
+    target: Path,
+    protect: set[str] | None = None,
+    allow_auxiliary: bool = True,
+    expected: set[str] | None = None,
+) -> tuple[list[Path], list[Path]]:
     written: list[Path] = []
     deleted: list[Path] = []
-    expected = FEATURE_CANONICAL
-    produced = set()
+    expected_files = expected if expected is not None else FEATURE_CANONICAL
+    produced: set[str] = set()
     protect = protect or set()
 
     for fname, code in files.items():
         path = target / fname
-        write_file(path, code + "\n")
-        written.append(path)
-        produced.add(fname)
+        blocks = parse_search_replace_blocks(code)
+        if blocks:
+            if path.exists():
+                original = read_file(path)
+                patched, applied, errors = apply_search_replace_blocks(original, code)
+                if applied and not errors:
+                    write_file(path, patched + ("\n" if not patched.endswith("\n") else ""))
+                    written.append(path)
+                    produced.add(fname)
+                    print(f"[Runner] Applied {len(blocks)} patch block(s) to {fname}")
+                else:
+                    print(f"[Runner] Failed to apply patch blocks to {fname}: {errors}", file=sys.stderr)
+            else:
+                print(f"[Runner] Cannot apply patch to non-existent file {fname}", file=sys.stderr)
+        else:
+            write_file(path, code + ("\n" if not code.endswith("\n") else ""))
+            written.append(path)
+            produced.add(fname)
 
-    for fname in expected:
+    if not allow_auxiliary:
+        non_canonical = (produced - expected_files) - protect
+        for fname in non_canonical:
+            path = target / fname
+            if path.exists():
+                path.unlink()
+                deleted.append(path)
+                produced.discard(fname)
+                print(f"[Runner] Deleted auxiliary file {fname} (--no-auxiliary active)")
+
+    for fname in expected_files:
         if fname not in produced and fname not in protect:
             path = target / fname
             if path.exists():
@@ -401,10 +531,12 @@ def auto_backend(
     spec: str = "",
     max_attempts: int = 0,
     no_controller: bool = False,
+    allow_auxiliary: bool = True,
 ) -> bool:
     expected = FEATURE_CANONICAL - {"Controller.py"} if no_controller else FEATURE_CANONICAL
     pre_existing = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
     protected_extra = pre_existing - expected
+    known_files = set(pre_existing)
     t_total = time.time()
 
     last_error: str = ""
@@ -418,14 +550,28 @@ def auto_backend(
             response = call_llm(prompt, persona=persona, max_attempts=max_attempts)
         files = extract_code_blocks(response)
         if files:
-            written, _ = write_code_blocks(files, target, protect=protected_extra | {p.name for p in written})
+            current_protect = protected_extra | known_files
+            new_written, _ = write_code_blocks(
+                files,
+                target,
+                protect=current_protect,
+                allow_auxiliary=allow_auxiliary,
+                expected=expected,
+            )
+            written = new_written
+            known_files.update(files.keys())
+            if not written and any(parse_search_replace_blocks(c) for c in files.values()):
+                last_error = "Failed to apply patch blocks to target files. Ensure SEARCH blocks match existing file content exactly or provide complete files."
+                print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
+                continue
         else:
-            written = [p for p in target.iterdir() if p.suffix == ".py" and p.name in expected]
+            written = [p for p in target.iterdir() if p.suffix == ".py" and p.name in (expected | known_files)]
             files = {p.name: p.read_text() for p in written}
             if not written:
                 last_error = "No code blocks found in LLM response and no files written to the target directory."
                 print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
                 continue
+
         for w in written:
             print(f"[Runner] Inspecting {w}")
         bad = truncated_files(written)
@@ -436,6 +582,7 @@ def auto_backend(
             last_error = f"Files appear truncated: {bad}. Regenerate complete code."
             print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
             continue
+
         struct_issues: list[str] = []
         for w in written:
             struct_issues.extend(validate_code_structure(w.read_text(), w.name))
@@ -447,9 +594,11 @@ def auto_backend(
         if all_violations:
             last_error = "Violations:\n  " + "\n  ".join(all_violations)
             print(f"[Runner] {last_error}", file=sys.stderr)
-        missing = expected - set(files.keys())
+
+        disk_files = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
+        missing = expected - disk_files
         if missing:
-            last_error = f"Missing files: {missing}. Must include ALL {len(expected)} files."
+            last_error = f"Missing canonical files: {missing}. Must include ALL {len(expected)} canonical files."
             print(f"[Runner] {last_error} Retrying... ({t_elapsed:.1f}s)", file=sys.stderr)
             continue
         if all_violations:
@@ -501,6 +650,7 @@ def run() -> None:
     parser.add_argument("--prompt-only", action="store_true", help="Print prompt to stdout only (no API call)")
     parser.add_argument("--max-attempts", type=int, default=0, help="Maximum LLM model-chain attempts; 0 = try every discovered free model (default: 0)")
     parser.add_argument("--no-controller", action="store_true", help="Skip Controller.py requirement")
+    parser.add_argument("--no-auxiliary", action="store_true", help="Disallow auxiliary non-canonical .py files")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full prompt and response to stderr")
     args = parser.parse_args()
     if args.verbose:
@@ -539,6 +689,7 @@ def run() -> None:
         spec=spec,
         max_attempts=args.max_attempts,
         no_controller=args.no_controller,
+        allow_auxiliary=not args.no_auxiliary,
     )
     if not ok:
         sys.exit(1)
