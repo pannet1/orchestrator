@@ -7,6 +7,7 @@ class TestSpecTemplate:
         assert "{action}" in SPEC_TEMPLATE
         assert "{domain_title}" in SPEC_TEMPLATE
         assert "{overview}" in SPEC_TEMPLATE
+        assert "{expected_files}" in SPEC_TEMPLATE
 
     def test_mentions_type_annotations(self) -> None:
         assert "type annotations" in SPEC_TEMPLATE.lower()
@@ -19,6 +20,7 @@ class TestSpecTemplate:
     def test_has_all_sections(self) -> None:
         sections = [
             "## Overview",
+            "## Expected Files",
             "## Input / Output",
             "## Business Logic Constraints",
             "## Error Cases",

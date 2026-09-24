@@ -84,7 +84,7 @@ cd ~/projects/MyApp
 | Command | Target | What it does | Next |
 |---|---|---|---|
 | `init <path>/<name>` | required | Create folder + `.agents` symlink → `agents/`. Ignores prompt. No `.features.json` yet. | `new` |
-| `new <domain/Feature> "prompt"` | required | Create feature branch, write `spec.md` (LLM-generated, template fallback), scaffold the 4 code files + `__init__.py`, register in `.features.json`. | `do` |
+| `new <domain/Feature> "prompt"` | required | Create feature branch, write `spec.md` (LLM-generated, template fallback, defining proposed files under `Expected Files`), touch `__init__.py`, register in `.features.json`. Code files are NOT pre-scaffolded so humans can inspect or edit `spec.md` before `do`. | `do` |
 | `modify <domain/Feature> "prompt"` | optional | Amend an existing spec: rewrite spec via LLM, append a `CONTRACT AMENDMENT` section, branch `modify/<Feature>`. Implicit mode (no target) uses the file open in `nvim`. | `do` |
 | `do [Feature]` | optional | Run the backend sub-agent: implement `spec.md`, pass QA gates + `pytest`, then `feat:` commit + push the branch (**not merged**). Inferred from current branch if no name. | `merge` |
 | `delete [Feature]` | optional | `rm -rf` feature dir, unregister from `.features.json`, delete local + remote branch(es). | `scan`/`new` |
@@ -122,7 +122,8 @@ Global flags (parsed in `orch.py`):
    across retries.
 3. Static QA gates (all must pass): structure, code standards (from
    `agents/rules/python.json`), the 11-rule **constitution**, PEP8
-   (E302/E501), no truncation, and canonical files present (`Schema.py`,
+   (E302/E501), no truncation, and canonical files present (extracted
+   dynamically from `spec.md`'s `Expected Files`, falling back to `Schema.py`,
    `Handler.py`, `Controller.py` unless `--no-controller`, `Tests.py`,
    or project/domain `canonical_files` defined in `.features.json`).
 4. `pytest` on the feature's `Tests.py` is executed inside the attempt loop.

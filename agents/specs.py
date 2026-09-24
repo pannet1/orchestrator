@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from .config import load_persona
@@ -6,6 +7,29 @@ from .llm import llm_complete
 MAX_SPEC_QA_ATTEMPTS = 3
 
 SPEC_QA_PERSONA = load_persona("spec_qa")
+
+
+def parse_expected_files(spec_text: str) -> list[str]:
+    """Extract expected canonical files listed under ## Expected Files (or ## Canonical Files / ## Files)."""
+    m = re.search(
+        r"##\s+(?:Expected Files|Canonical Files|Module Architecture|Files)\b(.*?)(?=\n## |\Z)",
+        spec_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return []
+    section = m.group(1)
+    files = re.findall(r"[`'\"]?([A-Za-z0-9_]+\.py)[`'\"]?", section)
+    seen: set[str] = set()
+    res: list[str] = []
+    for f in files:
+        if f not in seen and not f.startswith("__"):
+            seen.add(f)
+            res.append(f)
+    if "Tests.py" not in seen:
+        res.append("Tests.py")
+    return res
+
 
 
 def _validate_spec(spec: str, original_prompt: str) -> tuple[bool | None, str]:

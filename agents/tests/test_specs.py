@@ -93,3 +93,55 @@ class TestSpecs:
         assert "CONTRACT AMENDMENT for Payment" in out
         assert "./.agents/orch.py do Payment" in out
 
+    def test_parse_expected_files_standard_list(self) -> None:
+        spec_text = (
+            "# Feature\n\n"
+            "## Expected Files\n"
+            "* `Schema.py`\n"
+            "* `Handler.py`\n"
+            "* `Controller.py`\n"
+            "* `Tests.py`\n"
+        )
+        files = specs.parse_expected_files(spec_text)
+        assert files == ["Schema.py", "Handler.py", "Controller.py", "Tests.py"]
+
+    def test_parse_expected_files_custom_auth_manifest(self) -> None:
+        spec_text = (
+            "# Login Feature\n\n"
+            "## Expected Files\n"
+            "* `Schema.py`\n"
+            "* `Security.py`\n"
+            "* `Service.py`\n"
+            "* `Controller.py`\n"
+            "* `Tests.py`\n"
+        )
+        files = specs.parse_expected_files(spec_text)
+        assert files == ["Schema.py", "Security.py", "Service.py", "Controller.py", "Tests.py"]
+
+    def test_parse_expected_files_with_descriptions_and_headings(self) -> None:
+        spec_text = (
+            "# Worker Feature\n\n"
+            "## Module Architecture\n"
+            "- `Schema.py`: Pydantic models\n"
+            "- `Worker.py`: Background job runner\n"
+            "- `Tests.py`: Unit tests\n"
+        )
+        files = specs.parse_expected_files(spec_text)
+        assert files == ["Schema.py", "Worker.py", "Tests.py"]
+
+    def test_parse_expected_files_ensures_tests_py(self) -> None:
+        spec_text = (
+            "# Feature\n\n"
+            "## Expected Files\n"
+            "- `Schema.py`\n"
+            "- `Service.py`\n"
+        )
+        files = specs.parse_expected_files(spec_text)
+        assert files == ["Schema.py", "Service.py", "Tests.py"]
+
+    def test_parse_expected_files_empty_when_missing_section(self) -> None:
+        spec_text = "# Feature\n\n## Overview\nSome overview."
+        files = specs.parse_expected_files(spec_text)
+        assert files == []
+
+

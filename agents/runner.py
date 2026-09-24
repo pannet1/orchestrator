@@ -794,8 +794,16 @@ def run() -> None:
         print(f"Error: target not found: {args.target}", file=sys.stderr)
         sys.exit(1)
 
+    persona = read_file(args.persona)
+    target_files = collect_target_files(args.target)
+    spec_text = target_files.get("spec.md", "")
+    from agents.specs import parse_expected_files
+    spec_files = parse_expected_files(spec_text) if spec_text else []
+
     if args.canonical:
         expected_files: set[str] = {f.strip() for f in args.canonical.split(",") if f.strip()}
+    elif spec_files:
+        expected_files = set(spec_files)
     else:
         expected_files = set(FEATURE_CANONICAL)
         try:
@@ -808,9 +816,6 @@ def run() -> None:
 
     if args.no_controller:
         expected_files.discard("Controller.py")
-
-    persona = read_file(args.persona)
-    target_files = collect_target_files(args.target, expected=expected_files)
     task = args.task or f"Work on the feature at {args.target}"
     error = ""
     if args.error and args.error.exists():

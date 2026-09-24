@@ -5,7 +5,7 @@ from pathlib import Path
 from .config import AGENTS_DIR
 from .feature import register_target
 from .llm import generate_spec_with_ai
-from .specs import _qa_spec
+from .specs import _qa_spec, parse_expected_files
 from .templates import CODE_TEMPLATES, DEFAULT_OVERVIEW, SPEC_TEMPLATE
 
 
@@ -19,17 +19,30 @@ def scaffold_new_feature(target, overview: str = "", no_controller: bool = False
     slice_dir = target.dir
     slice_dir.mkdir(parents=True, exist_ok=True)
 
+    canonical = getattr(target, "canonical_files", None)
+    expected_files = list(canonical) if canonical else list(CODE_TEMPLATES.keys())
+    if no_controller:
+        expected_files = [f for f in expected_files if f != "Controller.py"]
+
+    expected_files_md = "\n".join(f"* `{fname}`" for fname in sorted(expected_files))
+
     if overview:
         ai_spec = generate_spec_with_ai(target.domain, target.name, overview)
         if ai_spec:
+            if not parse_expected_files(ai_spec):
+                ai_spec = ai_spec.rstrip() + f"\n\n## Expected Files\n\n{expected_files_md}\n"
             (slice_dir / "spec.md").write_text(ai_spec)
             _qa_spec(slice_dir / "spec.md", overview, f"new:{target.name}")
+            current_spec = (slice_dir / "spec.md").read_text()
+            if not parse_expected_files(current_spec):
+                (slice_dir / "spec.md").write_text(current_spec.rstrip() + f"\n\n## Expected Files\n\n{expected_files_md}\n")
         else:
             overview_text = format_spec_overview(overview)
             spec = SPEC_TEMPLATE.format(
                 domain_title=target.domain.title() if target.domain else target.name,
                 action=target.name,
                 overview=overview_text,
+                expected_files=expected_files_md,
             ).rstrip("\n")
             (slice_dir / "spec.md").write_text(spec)
             print("[Orchestrator] LLM unavailable — using template spec.md", file=sys.stderr)
@@ -38,33 +51,19 @@ def scaffold_new_feature(target, overview: str = "", no_controller: bool = False
             domain_title=target.domain.title() if target.domain else target.name,
             action=target.name,
             overview=DEFAULT_OVERVIEW,
+            expected_files=expected_files_md,
         ).rstrip("\n")
         (slice_dir / "spec.md").write_text(spec)
 
-    canonical = getattr(target, "canonical_files", None)
-    expected_files = set(canonical) if canonical else set(CODE_TEMPLATES.keys())
-    if no_controller:
-        expected_files.discard("Controller.py")
-
-    for fname in sorted(expected_files):
-        if fname in CODE_TEMPLATES:
-            content = CODE_TEMPLATES[fname].format(action=target.name).lstrip("\n")
-        else:
-            module_name = Path(fname).stem
-            content = (
-                "from shared.logger import logging_func\n\n"
-                f"logger = logging_func(__name__)\n\n\n"
-                f"class {target.name}{module_name}:\n"
-                f"    pass\n"
-            )
-        (slice_dir / fname).write_text(content)
-
+    # Do not pre-scaffold rigid code files (Schema.py, Handler.py, Controller.py, etc.).
+    # Human in the loop can modify the expected files in spec.md before running `do`.
     (slice_dir / "__init__.py").touch()
     register_target(target)
 
     label = f"{target.domain}/{target.name}"
     note = " (no controller)" if no_controller else ""
-    print(f"\nScaffolded new feature: {label}{note}\n")
+    print(f"\nScaffolded new feature spec: {label}{note}")
+    print(f"Review {slice_dir / 'spec.md'} to inspect or edit expected files before implementation.\n")
     return slice_dir
 
 

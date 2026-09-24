@@ -35,7 +35,8 @@ from .prompts import (
     resolve_prompt_for_implicit,
 )
 from .scaffold import init_new_project, scaffold_new_feature
-from .specs import amend_spec, rewrite_spec_with_ai
+from .specs import amend_spec, parse_expected_files, rewrite_spec_with_ai
+
 
 
 @dataclass
@@ -299,8 +300,15 @@ def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> Co
         task = f"Implement {display} per its spec.md"
     commit_type = "feat"
 
-    has_controller = (feature_dir / "Controller.py").exists()
-    canonical = getattr(target, "canonical_files", None)
+    spec_files = parse_expected_files(spec_text)
+    canonical: tuple[str, ...] | frozenset[str] | set[str] | list[str] | None = None
+    if spec_files:
+        canonical = tuple(spec_files)
+        has_controller = "Controller.py" in canonical
+    else:
+        canonical = getattr(target, "canonical_files", None)
+        has_controller = "Controller.py" in (canonical or ("Schema.py", "Handler.py", "Controller.py", "Tests.py"))
+
     ok = run_runner(
         "backend",
         feature_dir,

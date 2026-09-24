@@ -39,7 +39,7 @@ git branch name.
 | Command | What it does | Next |
 |---|---|---|
 | `init <path>/<project-name>` | Create project folder + `.agents` symlink → `agents/`. Does **not** create `.features.json`. Prompt arg ignored. | `new` |
-| `new <domain/Feature> "prompt"` | Create feature branch, write spec.md (LLM-generated + spec-QA'd, template fallback), scaffold 4 files (`Schema.py`, `Handler.py`, `Controller.py`, `Tests.py`) + `__init__.py`, register in `.features.json`. | `do` |
+| `new <domain/Feature> "prompt"` | Create feature branch, write spec.md (LLM-generated + spec-QA'd, template fallback, defining proposed files under `Expected Files`), touch `__init__.py`, register in `.features.json`. Code files are not pre-scaffolded so humans can inspect or edit `spec.md` before `do`. | `do` |
 | `modify <domain/Feature> "prompt"` | Amend the feature's spec.md via LLM + append a `CONTRACT AMENDMENT` section; branch `modify/<Feature>`. Implicit mode (no target): uses the file currently open in nvim. Creates the feature dir if missing (no controller). | `do` |
 | `do [Feature]` | Run the backend agent: LLM implements spec.md, QA gates validate, pytest must pass; then stage + commit (`feat: <Name>`) + push the branch (**not merged**). On `main` with clean slate, auto-creates the feature branch. | `merge` |
 | `delete [Feature]` | `rm -rf` the feature dir, unregister from `.features.json`, delete local branch(es). Remote branch untouched. | `scan` / `new` |
@@ -96,7 +96,8 @@ language file). No code changes required.
    modules and pre-existing files preserved).
 4. QA gates: code standards, unused imports, AGENTS.md constitution (11
    rules), root-file checks, PEP8, truncation, structure, canonical files
-   (`Schema.py`, `Handler.py`, `Controller.py` unless `--no-controller`, `Tests.py`);
+   (dynamically extracted from `spec.md`'s `Expected Files`, falling back to
+   `Schema.py`, `Handler.py`, `Controller.py` unless `--no-controller`, `Tests.py`);
    then `pytest` on the feature's tests inside the retry loop.
 5. On failure of any gate or test, loop re-runs with the error output
    (`auto_backend`), enabling targeted single-file or patch repairs before

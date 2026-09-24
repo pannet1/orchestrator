@@ -536,11 +536,13 @@ class TestScaffoldDynamicManifest:
         target = project.target_for_new("IngestData", "pipeline")
         slice_dir = scaffold_new_feature(target, "")
 
-        assert (slice_dir / "Schema.py").exists()
-        assert (slice_dir / "Worker.py").exists()
-        assert (slice_dir / "Tests.py").exists()
-        assert not (slice_dir / "Controller.py").exists()
-        assert not (slice_dir / "Handler.py").exists()
-        content = (slice_dir / "Worker.py").read_text()
-        assert "from shared.logger import logging_func" in content
-        assert "class IngestDataWorker:" in content
+        assert (slice_dir / "spec.md").exists()
+        assert (slice_dir / "__init__.py").exists()
+        assert not (slice_dir / "Schema.py").exists()
+        assert not (slice_dir / "Worker.py").exists()
+        assert not (slice_dir / "Tests.py").exists()
+        spec_content = (slice_dir / "spec.md").read_text()
+        assert "## Expected Files" in spec_content
+        assert "`Schema.py`" in spec_content
+        assert "`Worker.py`" in spec_content
+        assert "`Tests.py`" in spec_content

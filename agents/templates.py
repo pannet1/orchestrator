@@ -5,6 +5,10 @@ SPEC_TEMPLATE = """\
 
 {overview}
 
+## Expected Files
+
+{expected_files}
+
 ## Input / Output
 
 | Direction | Format | Description |
