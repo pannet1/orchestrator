@@ -1,0 +1,60 @@
+{
+  "lang": "ts",
+  "checks": [
+    {
+      "id": "comment",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "^\\s*//",
+      "exclude": ["@ts-ignore", "@ts-expect-error", "/// <reference", "#!"],
+      "message": "comments not allowed"
+    },
+    {
+      "id": "comment-block",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "^\\s*/\\*",
+      "message": "comments not allowed"
+    },
+    {
+      "id": "no-console-log",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "console\\.log\\(",
+      "message": "use shared logger, not console.log()"
+    },
+    {
+      "id": "no-emoji",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "[\\U0001F000-\\U0010FFFF]",
+      "message": "emoji found"
+    },
+    {
+      "id": "handler-logger",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["Handler.ts", "Handler.js"],
+      "contains": ["logger"],
+      "message": "Handler must have a module-level logger"
+    },
+    {
+      "id": "tests-presence",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["Tests.ts", "Tests.js"],
+      "contains": ["test"],
+      "message": "Tests must contain test assertions"
+    },
+    {
+      "id": "balanced",
+      "group": "structure",
+      "kind": "balanced",
+      "pairs": [
+        {"open": "(", "close": ")", "message": "Unbalanced parentheses: {open} open vs {close} close"},
+        {"open": "{", "close": "}", "message": "Unbalanced braces: {open} open vs {close} close"},
+        {"open": "[", "close": "]", "message": "Unbalanced brackets: {open} open vs {close} close"}
+      ]
+    }
+  ]
+}

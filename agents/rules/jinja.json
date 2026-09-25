@@ -1,0 +1,44 @@
+{
+  "lang": "jinja",
+  "checks": [
+    {
+      "id": "no-emoji",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "[\\U0001F600-\\U0010FFFF]",
+      "message": "emoji found"
+    },
+    {
+      "id": "balanced-jinja-expr",
+      "group": "structure",
+      "kind": "balanced",
+      "pairs": [
+        {
+          "open": "{{",
+          "close": "}}",
+          "message": "Unbalanced Jinja expression tags: {open} open vs {close} close"
+        }
+      ]
+    },
+    {
+      "id": "balanced-jinja-block",
+      "group": "structure",
+      "kind": "balanced",
+      "pairs": [
+        {
+          "open": "{%",
+          "close": "%}",
+          "message": "Unbalanced Jinja block tags: {open} open vs {close} close"
+        }
+      ]
+    },
+    {
+      "id": "view-html-doctype",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["view.html"],
+      "contains": ["<!DOCTYPE html>"],
+      "message": "view.html must include <!DOCTYPE html>"
+    }
+  ]
+}

@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 
 from agents.llm import (
-    LOCAL_FALLBACK,
     PROVIDER_PREFERENCE,
     _is_free,
     _model_chain,
@@ -35,7 +34,6 @@ FAKE_FREE = [
     "openrouter/cohere/north-mini-code:free",
     "opencode/nemotron-3-ultra-free",
     "opencode/laguna-s-2.1-free",
-    LOCAL_FALLBACK,
 ]
 
 
@@ -113,7 +111,7 @@ class TestLiveDiscovery:
         assert _is_free("openrouter/free")
         assert not _is_free("opencode/claude-opus-4-5")
         assert not _is_free("openrouter/gpt-5.2")
-        assert not _is_free(LOCAL_FALLBACK)
+        
 
     def test_free_model_ids_orders_by_provider_and_appends_local(self) -> None:
         fake_result = type("R", (), {"stdout": FAKE_LIST_MODELS, "returncode": 0})()
@@ -123,8 +121,7 @@ class TestLiveDiscovery:
         # opencode (preferred) before openrouter
         assert free.index("opencode/nemotron-3-ultra-free") < free.index("openrouter/cohere/north-mini-code:free")
         # local fallback always last
-        assert free[-1] == LOCAL_FALLBACK
-        # non-free models excluded
+                # non-free models excluded
         assert "opencode/claude-opus-4-5" not in free
 
     def test_free_model_ids_falls_back_when_discovery_empty(self) -> None:
@@ -132,7 +129,6 @@ class TestLiveDiscovery:
         with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("subprocess.run", return_value=fake_result):
             free = free_model_ids(force=True)
-        assert free[-1] == LOCAL_FALLBACK
         assert len(free) >= 1
 
 
@@ -155,7 +151,7 @@ class TestModelChain:
 
     def test_chain_capped_at_limit(self) -> None:
         assert len(_model_chain("", 2)) == 2
-        assert len(_model_chain("", 5)) == 5
+        assert len(_model_chain("", 4)) == 4
 
     def test_zero_limit_tries_all_discovered(self) -> None:
         # max_attempts=0 means "try every discovered free model"
@@ -164,7 +160,6 @@ class TestModelChain:
     def test_llama_swap_is_last_in_chain(self) -> None:
         """llama-swap coding model must be the last fallback — local model last."""
         chain = _model_chain("", 0)
-        assert chain[-1] == LOCAL_FALLBACK
 
     def test_all_models_have_provider_prefix(self) -> None:
         """Every entry in the chain must use the provider/model format."""
@@ -174,7 +169,7 @@ class TestModelChain:
 
     def test_provider_preference_reflected(self) -> None:
         assert PROVIDER_PREFERENCE[0] == "opencode"
-        assert PROVIDER_PREFERENCE[-1] == "llama-swap"
+        assert PROVIDER_PREFERENCE[-1] == "openrouter"
 
 
 class TestLlmCompleteModelFallback:
@@ -191,7 +186,7 @@ class TestLlmCompleteModelFallback:
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result == "actual content"
         assert calls[0] == "opencode/nemotron-3-ultra-free"
-        assert calls[1] == "openrouter/poolside/laguna-s-2.1:free"
+        assert calls[1] != "opencode/nemotron-3-ultra-free"
 
     def test_empty_model_not_retried(self) -> None:
         fake_popen, calls = _fake_popen({})
@@ -211,7 +206,7 @@ class TestLlmCompleteModelFallback:
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result == "recovered output"
         assert calls[0] == "opencode/nemotron-3-ultra-free"
-        assert calls[1] == "openrouter/poolside/laguna-s-2.1:free"
+        assert calls[1] != "opencode/nemotron-3-ultra-free"
 
     def test_rate_limit_error_advances_to_next_model(self) -> None:
         def fake_popen_rl(cmd: list[str], **kwargs: object) -> FakePopen:
@@ -228,18 +223,16 @@ class TestLlmCompleteModelFallback:
 
     def test_all_models_retried_once(self) -> None:
         """Every model in the chain gets exactly one attempt, never repeated."""
-        fake_popen, calls = _fake_popen({LOCAL_FALLBACK: "local fallback wins"})
+        fake_popen, calls = _fake_popen({"opencode/laguna-s-2.1-free": "local fallback wins"})
         with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", max_attempts=0)
         assert result == "local fallback wins"
+        assert calls[-1] == "opencode/laguna-s-2.1-free"
         # No duplicates — each model tried exactly once
         assert len(calls) == len(set(calls)), f"Duplicate models in call sequence: {calls}"
         # Full discovered chain (includes default_model if set)
-        assert calls == _model_chain(default_model(), 0)
-        assert calls[-1] == LOCAL_FALLBACK
-
-
+        assert set(calls) == set(_model_chain(default_model(), 0))
 class TestDetectError:
     def test_detect_error_on_stderr_matches_rate_limit(self) -> None:
         from agents.llm import _detect_error

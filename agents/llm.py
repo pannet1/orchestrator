@@ -19,18 +19,12 @@ MODEL_CHAIN_FILE = AGENTS_DIR / "model_chain.json"
 
 # Provider preference order. Free models are tried in this provider order;
 # the opencode family is exhausted first (its free catalogue rotates often and
-# is the primary free provider), then openrouter, with the local llama-swap
-# model always the last resort (no network needed).
+# is the primary free provider), then openrouter.
 PROVIDER_PREFERENCE: tuple[str, ...] = (
     "opencode",
     "opencode-go",
     "openrouter",
-    "llama-swap",
 )
-
-# Local fallback model that should always be available (runs on the machine,
-# no API/network). Kept as the guaranteed final attempt.
-LOCAL_FALLBACK = "llama-swap/qwen2.5-coder-7b-instruct"
 
 # Safety net used only when live model discovery fails entirely (e.g. `pi`
 # missing or offline). Mirrors a last-known-good free chain.
@@ -40,7 +34,6 @@ DEFAULT_MODEL_CHAIN: tuple[str, ...] = (
     "opencode/nemotron-3-ultra-free",
     "opencode/deepseek-v4-flash-free",
     "opencode/laguna-s-2.1-free",
-    LOCAL_FALLBACK,
 )
 
 # Process-lifetime cache of the discovered model ids. Free-tier providers
@@ -49,6 +42,67 @@ DEFAULT_MODEL_CHAIN: tuple[str, ...] = (
 _model_cache: list[str] | None = None
 _model_cache_time: float = 0.0
 MODEL_CACHE_TTL = 300.0  # seconds — re-query providers at most every 5 minutes
+
+MODEL_STATS_FILE = AGENTS_DIR / "model_stats.json"
+_last_successful_model: str = ""
+
+def get_last_model() -> str:
+    return _last_successful_model
+
+def record_model_experience(model: str, task: str, success: bool) -> None:
+    if not model:
+        return
+    stats = {}
+    if MODEL_STATS_FILE.exists():
+        try:
+            stats = json.loads(MODEL_STATS_FILE.read_text())
+        except Exception:
+            pass
+
+    if model not in stats:
+        stats[model] = {"successes": 0, "failures": 0, "tasks": {}}
+    
+    if success:
+        stats[model]["successes"] += 1
+    else:
+        stats[model]["failures"] += 1
+        
+    t_stats = stats[model]["tasks"].setdefault(task, {"successes": 0, "failures": 0})
+    if success:
+        t_stats["successes"] += 1
+    else:
+        t_stats["failures"] += 1
+
+    try:
+        MODEL_STATS_FILE.write_text(json.dumps(stats, indent=2) + "\n")
+    except Exception:
+        pass
+
+def get_model_score(model: str, task: str = "") -> float:
+    if not MODEL_STATS_FILE.exists():
+        return 0.5  # default Laplace smooth for untried
+    try:
+        stats = json.loads(MODEL_STATS_FILE.read_text())
+    except Exception:
+        return 0.5
+        
+    m_stats = stats.get(model)
+    if not m_stats:
+        return 0.5
+        
+    s = m_stats["successes"]
+    f = m_stats["failures"]
+    base_score = (s + 1) / (s + f + 2)
+    
+    if task and task in m_stats["tasks"]:
+        t_s = m_stats["tasks"][task]["successes"]
+        t_f = m_stats["tasks"][task]["failures"]
+        if (t_s + t_f) > 0:
+            task_score = (t_s + 1) / (t_s + t_f + 2)
+            return (base_score * 0.4) + (task_score * 0.6)
+            
+    return base_score
+
 
 
 def _load_pinned_models() -> list[str]:
@@ -133,8 +187,7 @@ def free_model_ids(force: bool = False) -> list[str]:
     """Return the currently-available free models, ordered by PROVIDER_PREFERENCE.
 
     Discovery is live, so newly rotated-in free models are picked up
-    automatically and rotated-out ones are dropped. The local llama-swap model
-    is always appended as the final fallback. Falls back to
+    automatically and rotated-out ones are dropped. Falls back to
     DEFAULT_MODEL_CHAIN when discovery yields nothing.
     """
     all_ids = query_provider_models(force=force)
@@ -163,9 +216,6 @@ def free_model_ids(force: bool = False) -> list[str]:
         if m not in ordered:
             ordered.append(m)
 
-    # Always keep the local fallback available as the last resort.
-    if LOCAL_FALLBACK not in ordered:
-        ordered.append(LOCAL_FALLBACK)
     return ordered
 
 
@@ -179,7 +229,7 @@ def default_model() -> str:
     return cfg.get("model", "")
 
 
-def _model_chain(model: str, limit: int = 0) -> list[str]:
+def _model_chain(model: str, limit: int = 0, task: str = "") -> list[str]:
     """Attempt order: an explicitly requested `model` (or configured default)
     leads, then every live free model discovered from the providers, deduped.
     `limit` caps the chain (0 / negative = try all discovered free models).
@@ -188,7 +238,20 @@ def _model_chain(model: str, limit: int = 0) -> list[str]:
     chain: list[str] = []
     if model:
         chain.append(model)
-    for candidate in free_model_ids():
+    free = free_model_ids()
+    def sort_key(m: str) -> tuple[int, float, int, int]:
+        from .config import MODEL_CONFIG
+        score = get_model_score(m, task)
+        provider = m.split("/", 1)[0]
+        try:
+            pidx = PROVIDER_PREFERENCE.index(provider)
+        except ValueError:
+            pidx = len(PROVIDER_PREFERENCE)
+        return (0, -score, pidx, free.index(m))
+        
+    free_sorted = sorted(free, key=sort_key)
+    
+    for candidate in free_sorted:
         if candidate not in chain:
             chain.append(candidate)
         if limit and len(chain) >= limit:
@@ -412,7 +475,24 @@ class PiStreamFormatter:
         self._ensure_newline()
 
 
-def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 300, max_attempts: int = 0) -> str | None:
+def llm_complete(
+    prompt: str,
+    system: str = "",
+    model: str = "",
+    timeout: int = 300,
+    max_attempts: int = 0,
+    task_category: str = "",
+) -> str | None:
+    return _llm_complete(prompt, system, model, timeout, max_attempts, task_category)
+
+def _llm_complete(
+    prompt: str,
+    system: str = "",
+    model: str = "",
+    timeout: int = 300,
+    max_attempts: int = 0,
+    task_category: str = "",
+) -> str | None:
     """One-shot completion routed through the pi harness (`pi -p --mode json`).
 
     Mirrors the interactive TUI session as closely as possible: runs in the
@@ -444,7 +524,7 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
     if system:
         base_cmd += ["--system-prompt", system]
 
-    chain = _model_chain(model or default_model(), max_attempts)
+    chain = _model_chain(model or default_model(), max_attempts, task=task_category)
     total_models = len(chain)
 
     for i, m in enumerate(chain, 1):
@@ -512,6 +592,7 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
         formatter.finish()
 
         if error_encountered:
+            record_model_experience(m, task_category or "api_call", success=False)
             print(f"[LLM] Attempt {i} error detected ({error_reason}) — cancelling and trying next model", file=sys.stderr)
             sys.stderr.flush()
             try:
@@ -551,11 +632,13 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
         sys.stderr.flush()
 
         if error_encountered:
+            record_model_experience(m, task_category or "api_call", success=False)
             print(f"[LLM] Attempt {i} error detected ({error_reason}) — trying next model", file=sys.stderr)
             sys.stderr.flush()
             continue
 
         if proc.returncode != 0:
+            record_model_experience(m, task_category or "api_call", success=False)
             tail = [l for l in stderr_lines if l][-3:]
             print(f"[LLM] Attempt {i} failed with code {proc.returncode} (model: {m}): {' | '.join(tail) or 'no stderr'}", file=sys.stderr)
             sys.stderr.flush()
@@ -564,15 +647,19 @@ def llm_complete(prompt: str, system: str = "", model: str = "", timeout: int = 
         stdout_data = "\n".join(stdout_lines)
         result = _extract_text(stdout_data)
         if not result:
+            record_model_experience(m, task_category or "api_call", success=False)
             print(f"[LLM] Attempt {i} returned no text (model: {m}{_stop_reason(stdout_data)}) — retrying", file=sys.stderr)
             sys.stderr.flush()
             continue
 
         if any(marker in result for marker in TOOL_CALL_MARKERS):
+            record_model_experience(m, task_category or "tool_call_fail", success=False)
             print(f"[LLM] Attempt {i} response contains raw tool-call markers (model: {m}) — trying next model", file=sys.stderr)
             sys.stderr.flush()
             continue
 
+        global _last_successful_model
+        _last_successful_model = m
         return result
 
     print("[LLM] No model produced usable text — giving up.", file=sys.stderr)

@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 from .config import load_persona
-from .llm import llm_complete
+from .llm import llm_complete, get_last_model, record_model_experience
 
 MAX_SPEC_QA_ATTEMPTS = 3
 
@@ -19,14 +19,15 @@ def parse_expected_files(spec_text: str) -> list[str]:
     if not m:
         return []
     section = m.group(1)
-    files = re.findall(r"[`'\"]?([A-Za-z0-9_]+\.py)[`'\"]?", section)
+    files = re.findall(r"[`'\"]?([A-Za-z0-9_]+\.(?:py|ts|js|tsx|jsx|html|sql))[`'\"]?", section)
     seen: set[str] = set()
     res: list[str] = []
     for f in files:
         if f not in seen and not f.startswith("__"):
             seen.add(f)
             res.append(f)
-    if "Tests.py" not in seen:
+    test_files = {"Tests.py", "Tests.ts", "Tests.js"}
+    if not any(t in seen for t in test_files):
         res.append("Tests.py")
     return res
 

@@ -20,7 +20,12 @@ except ImportError:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Orchestrator Agent -- decompose and dispatch feature work.",
-        usage="%(prog)s <action> <domain/Feature> [inline prompt] [--prompt <file>]",
+        usage="%(prog)s <action> <domain/Feature> [inline prompt] [flags]",
+        add_help=False,
+    )
+    parser.add_argument(
+        "--help", "-h", action="store_true",
+        help="show this help message and exit",
     )
     parser.add_argument(
         "command",
@@ -49,35 +54,33 @@ def parse_args() -> argparse.Namespace:
         "--app", "-a", default="",
         help="App context: 'private' for admin features (uses features/ dir instead of web/features/)",
     )
+    parser.add_argument(
+        "--stack", "-s", default="",
+        choices=["python", "typescript", "javascript", ""],
+        help="Project stack: python, typescript, or javascript",
+    )
+    parser.add_argument(
+        "--db", default="",
+        help="Database engine (e.g. sqlite, duckdb, postgres) for vertical slice schema.sql",
+    )
+    parser.add_argument(
+        "--ui", default="",
+        help="Frontend UI template type: 'vue' (Jinja2+Vue3) or 'plain' (Jinja2+Plain JS)",
+    )
+    parser.add_argument(
+        "--no-tester", action="store_true",
+        help="Skip adversarial Tester subagent audit of Tests.py",
+    )
     args = parser.parse_args()
     if args.model:
         MODEL_CONFIG.write_text(json.dumps({"model": args.model}) + "\n")
         print(f"[Orchestrator] Model set to: {args.model}\n")
-    if not args.command:
+    if getattr(args, "help", False) or not args.command:
         parser.print_help()
         print()
-        print("Usage:  ./.agents/orch.py <action> <domain/Feature> [inline prompt]")
-        print("Prompt commands (expect an inline prompt):")
-        print('  init     <path>/<project-name>           create new project')
-        print("  new      <domain/Feature> \"prompt\"       scaffold new feature")
-        print("  modify   <domain/Feature> \"prompt\"       amend existing spec")
-        print()
-        print("Branch commands (run from the feature branch):")
-        print("  do                                     run backend agent")
-        print("  delete                                 remove feature")
-        print("  merge                                  merge current branch to main")
-        print("  undo                                   discard branch, reset to main")
-        print()
-        print("Other:")
-        print("  move     <OldDomain/OldFeature> <NewDomain/NewFeature>")
-        print("  scan                                   discover existing features")
-        print("  qa                                     run feature tests + code-standards audit (no LLM)")
-        print()
-        print("  ./.agents/orch.py new Payments \"auction payment wallet flow\"")
-        print("  ./.agents/orch.py modify shared/Payment \"share screenshot separately\"")
-        print("  ./.agents/orch.py do Payment")
-        print("  ./.agents/orch.py qa")
-        sys.exit(1)
+        from agents.commands import _HELP_TEXT
+        print(_HELP_TEXT)
+        sys.exit(0 if getattr(args, "help", False) else 1)
     return args
 
 
@@ -91,7 +94,17 @@ if __name__ == "__main__":
             prompt_content = path.read_text().strip()
         else:
             prompt_content = args.prompt.strip()
-    result = dispatch(request, prompt_content, no_controller=args.no_controller, app=args.app, max_attempts=args.max_attempts)
+    result = dispatch(
+        request,
+        prompt_content,
+        no_controller=args.no_controller,
+        no_tester=args.no_tester,
+        app=args.app,
+        max_attempts=args.max_attempts,
+        stack=args.stack,
+        db=args.db,
+        ui=args.ui,
+    )
     if result.next_action:
         print()
         print(f"Next: {result.next_action}")

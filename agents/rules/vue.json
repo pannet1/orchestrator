@@ -1,0 +1,36 @@
+{
+  "lang": "vue",
+  "checks": [
+    {
+      "id": "no-emoji",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "[\\U0001F600-\\U0010FFFF]",
+      "message": "emoji found"
+    },
+    {
+      "id": "balanced-template",
+      "group": "structure",
+      "kind": "balanced",
+      "pairs": [
+        {
+          "open": "<template>",
+          "close": "</template>",
+          "message": "Unbalanced <template> tags in Vue component"
+        },
+        {
+          "open": "<script>",
+          "close": "</script>",
+          "message": "Unbalanced <script> tags in Vue component"
+        }
+      ]
+    },
+    {
+      "id": "vue-template-required",
+      "group": "structure",
+      "kind": "text-required",
+      "contains": ["<template>"],
+      "message": "Vue component must contain a <template> block"
+    }
+  ]
+}

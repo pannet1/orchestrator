@@ -1,0 +1,32 @@
+{
+  "lang": "sql",
+  "checks": [
+    {
+      "id": "no-emoji",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "[\\U0001F600-\\U0010FFFF]",
+      "message": "emoji found"
+    },
+    {
+      "id": "balanced-parentheses",
+      "group": "structure",
+      "kind": "balanced",
+      "pairs": [
+        {
+          "open": "(",
+          "close": ")",
+          "message": "Unbalanced parentheses in SQL: {open} open vs {close} close"
+        }
+      ]
+    },
+    {
+      "id": "idempotent-ddl",
+      "group": "structure",
+      "kind": "text-required",
+      "only": ["schema.sql"],
+      "contains": ["CREATE TABLE IF NOT EXISTS"],
+      "message": "schema.sql must use CREATE TABLE IF NOT EXISTS for idempotent DDL"
+    }
+  ]
+}

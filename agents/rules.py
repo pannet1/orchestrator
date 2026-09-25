@@ -38,6 +38,8 @@ LANG_BY_EXT: dict[str, str] = {
     ".jinja2": "jinja",
     ".ts": "ts",
     ".js": "ts",
+    ".html": "jinja",
+    ".sql": "sql",
 }
 
 _cache: dict[str, list[dict]] = {}

@@ -31,18 +31,18 @@ FEATURE_CANONICAL = {"Schema.py", "Handler.py", "Controller.py", "Tests.py"}
 
 try:
     from agents import rules
-    from agents.llm import llm_complete
+    from agents.llm import llm_complete, get_last_model, record_model_experience
 except ImportError:
     try:
         from . import rules
         from .llm import llm_complete
     except ImportError:
         import rules  # type: ignore[no-redef]
-        from llm import llm_complete  # type: ignore[no-redef]
+        from llm import llm_complete, get_last_model, record_model_experience  # type: ignore[no-redef]
 
 
-def _complete(prompt: str, persona: str = "", max_attempts: int = 0) -> str | None:
-    return llm_complete(prompt, system=persona, max_attempts=max_attempts)
+def _complete(prompt: str, persona: str = "", max_attempts: int = 0, task: str = "") -> str | None:
+    return llm_complete(prompt, system=persona, max_attempts=max_attempts, task_category=task)
 
 
 def read_file(path: Path) -> str:
@@ -63,8 +63,9 @@ def collect_target_files(target: Path, expected: set[str] | frozenset[str] | lis
         path = target / fname
         if path.exists():
             files[fname] = read_file(path)
+    allowed_suffixes = {".py", ".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs", ".html", ".sql"}
     for p in sorted(target.iterdir()):
-        if p.is_file() and p.suffix == ".py" and p.name not in files:
+        if p.is_file() and p.suffix in allowed_suffixes and p.name not in files:
             files[p.name] = read_file(p)
     return files
 
@@ -117,8 +118,8 @@ def build_retry_prompt(target: Path, last_error: str) -> str:
     )
 
 
-def call_llm(prompt: str, persona: str = "", max_attempts: int = 0) -> str:
-    response = _complete(prompt, persona=persona, max_attempts=max_attempts)
+def call_llm(prompt: str, persona: str = "", max_attempts: int = 0, task: str = "") -> str:
+    response = _complete(prompt, persona=persona, max_attempts=max_attempts, task=task)
     if response is None:
         print("[Runner] LLM call failed.", file=sys.stderr)
         sys.exit(1)
@@ -230,17 +231,17 @@ def strip_preamble(text: str) -> str:
 def extract_code_blocks(text: str) -> dict[str, str]:
     files: dict[str, str] = {}
 
-    text = strip_preamble(text)
+    stripped_text = strip_preamble(text)
 
     # Primary: try JSON (both bare and fenced)
-    files = extract_json_blocks(text)
+    files = extract_json_blocks(stripped_text)
     if files:
         return {k: _unescape(v) for k, v in files.items()}
 
     # Fallback: markdown patterns
     # Pattern 1: ### filename\n```python/diff/patch ... ```
     pattern1 = re.compile(
-        r'^###\s+(\S+)\s*\n```(?:python|diff|patch)?\n(.*?)```',
+        r'^###\s+(\S+)\s*\n```(?:python|py|ts|typescript|js|javascript|html|jinja|jinja2|sql|diff|patch)?\n(.*?)```',
         re.MULTILINE | re.DOTALL
     )
     for match in pattern1.finditer(text):
@@ -251,7 +252,7 @@ def extract_code_blocks(text: str) -> dict[str, str]:
 
     # Pattern 2: ## `path/to/filename` ... ```python/diff/patch ... ```
     pattern2 = re.compile(
-        r'^##\s+`[^`]+/(\S+)`\s*\n.*?```(?:python|diff|patch)?\n(.*?)```',
+        r'^##\s+`[^`]+/(\S+)`\s*\n.*?```(?:python|py|ts|typescript|js|javascript|html|jinja|jinja2|sql|diff|patch)?\n(.*?)```',
         re.MULTILINE | re.DOTALL
     )
     for match in pattern2.finditer(text):
@@ -260,9 +261,9 @@ def extract_code_blocks(text: str) -> dict[str, str]:
         if fname and code and fname not in files:
             files[fname] = _unescape(code)
 
-    # Pattern 3: ###/## filename.py followed directly by SEARCH/REPLACE blocks (no markdown fence)
+    # Pattern 3: ###/## filename followed directly by SEARCH/REPLACE blocks (no markdown fence)
     pattern3 = re.compile(
-        r'^#{2,3}\s+(?:`?[^`\n]+/)?(\S+\.py)`?\s*\n\s*(<{5,9}\s*SEARCH.*?>{5,9}(?:[^\r\n]*))',
+        r'^#{2,3}\s+(?:`?[^`\n]+/)?(\S+\.(?:py|ts|js|tsx|jsx|html|sql))`?\s*\n\s*(<{5,9}\s*SEARCH.*?>{5,9}(?:[^\r\n]*))',
         re.MULTILINE | re.DOTALL
     )
     for match in pattern3.finditer(text):
@@ -271,9 +272,9 @@ def extract_code_blocks(text: str) -> dict[str, str]:
         if fname and code and fname not in files:
             files[fname] = _unescape(code)
 
-    # Pattern 4: any ```python/diff/patch ... ``` block preceded by a filename somewhere nearby
+    # Pattern 4: any ```...``` block preceded by a filename somewhere nearby
     if not files:
-        blocks = re.split(r'```(?:python|diff|patch)?\n', text)
+        blocks = re.split(r'```(?:python|py|ts|typescript|js|javascript|html|jinja|jinja2|sql|diff|patch)?\n', text)
         for i in range(1, len(blocks), 2):
             code = blocks[i].strip()
             if code.endswith("```"):
@@ -281,7 +282,7 @@ def extract_code_blocks(text: str) -> dict[str, str]:
             if not code:
                 continue
             before = blocks[i - 1]
-            candidates = re.findall(r'(\w+\.py)', before)
+            candidates = re.findall(r'(\w+\.(?:py|ts|js|tsx|jsx|html|sql))', before)
             if candidates:
                 files[candidates[-1]] = _unescape(code)
 
@@ -340,7 +341,8 @@ def write_code_blocks(
                 deleted.append(path)
                 print(f"[Runner] Deleted {fname} (absent from AI output)")
 
-    all_on_disk = {p.name for p in target.iterdir() if p.suffix == ".py"}
+    code_suffixes = {".py", ".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs", ".html", ".sql"}
+    all_on_disk = {p.name for p in target.iterdir() if p.suffix in code_suffixes}
     unexpected = all_on_disk - produced - {p.name for p in deleted} - protect
     for fname in unexpected:
         path = target / fname
@@ -352,92 +354,107 @@ def write_code_blocks(
 
 
 def validate_code_standards(written: list[Path]) -> list[str]:
-    """Per-file standards gates, driven by agents/rules/python.json (group 'standards')."""
+    """Per-file standards gates, driven by agents/rules/<lang>.json (group 'standards')."""
     violations: list[str] = []
+    code_suffixes = {".py", ".ts", ".js", ".tsx", ".jsx", ".html", ".sql"}
     for p in written:
-        if not p.exists() or p.suffix != ".py":
+        if not p.exists() or p.suffix not in code_suffixes:
             continue
         for v in rules.check_text(p.read_text(), p.name, groups={"standards"}):
             violations.append(f"{v.path}:{v.line} {v.message}" if v.line else f"{v.path}: {v.message}")
     return violations
 
 
-def validate_constitution(repo_root: Path, target: Path) -> list[str]:
-    """Enforce ALL 11 rules from AGENTS.md Section 3 via script code."""
+def validate_constitution(repo_root: Path, target: Path, stack: str = "python") -> list[str]:
+    """Enforce constitution rules per stack."""
     issues: list[str] = []
 
-    # 1. Python version file
-    py_ver_file = repo_root / ".python-version"
-    if not py_ver_file.exists():
-        issues.append("Missing .python-version")
+    if stack == "python":
+        # 1. Python version file
+        py_ver_file = repo_root / ".python-version"
+        if not py_ver_file.exists():
+            issues.append("Missing .python-version")
 
-    # 2. Package manager: uv only
-    pyproject = repo_root / "pyproject.toml"
-    if pyproject.exists():
-        text = pyproject.read_text()
-        if '[tool.poetry]' in text or '[tool.pdm]' in text:
-            issues.append("pyproject.toml uses non-uv tool (poetry/pdm detected)")
-    else:
-        issues.append("Missing pyproject.toml (uv-managed)")
+        # 2. Package manager: uv only
+        pyproject = repo_root / "pyproject.toml"
+        if pyproject.exists():
+            text = pyproject.read_text()
+            if '[tool.poetry]' in text or '[tool.pdm]' in text:
+                issues.append("pyproject.toml uses non-uv tool (poetry/pdm detected)")
+        else:
+            issues.append("Missing pyproject.toml (uv-managed)")
 
-    # 3. No pip/poetry/conda
-    for marker in ("requirements.txt", "Pipfile", "Pipfile.lock", "poetry.lock", "environment.yml", "setup.py", "setup.cfg"):
-        if (repo_root / marker).exists():
-            issues.append(f"Forbidden package manager file: {marker} (use uv only)")
+        # 3. No pip/poetry/conda
+        for marker in ("requirements.txt", "Pipfile", "Pipfile.lock", "poetry.lock", "environment.yml", "setup.py", "setup.cfg"):
+            if (repo_root / marker).exists():
+                issues.append(f"Forbidden package manager file: {marker} (use uv only)")
 
-    # 4. No requirements.txt (duplicate check, explicit)
-    if (repo_root / "requirements.txt").exists():
-        issues.append("requirements.txt not permitted (use pyproject.toml + uv)")
+        # 4. No requirements.txt (duplicate check, explicit)
+        if (repo_root / "requirements.txt").exists():
+            issues.append("requirements.txt not permitted (use pyproject.toml + uv)")
 
-    # 5. Project time library only — check imports in generated code
-    # Detect the project's designated time library from existing code (ignore .venv/caches)
-    ignored_parts = {".venv", "venv", "env", "node_modules", "__pycache__", ".git", ".mypy_cache", ".ruff_cache"}
-    existing_files = [f for f in repo_root.rglob("*.py") if not any(p in ignored_parts for p in f.parts)]
-    time_libs = {"pendulum", "arrow", "python-dateutil", "delorean", "maya", "udatetime", "pytz"}
-    project_time_lib: str = ""
-    for f in existing_files:
-        if "__pycache__" in f.parts:
-            continue
-        text = f.read_text()
-        for m in re.finditer(r'^import (\w+)|^from (\w+)', text, re.MULTILINE):
-            lib = m.group(1) or m.group(2)
-            if lib in time_libs:
-                project_time_lib = lib
+        # 5. Project time library only — check imports in generated code
+        # Detect the project's designated time library from existing code (ignore .venv/caches)
+        ignored_parts = {".venv", "venv", "env", "node_modules", "__pycache__", ".git", ".mypy_cache", ".ruff_cache"}
+        existing_files = [f for f in repo_root.rglob("*.py") if not any(p in ignored_parts for p in f.parts)]
+        time_libs = {"pendulum", "arrow", "python-dateutil", "delorean", "maya", "udatetime", "pytz"}
+        project_time_lib: str = ""
+        for f in existing_files:
+            if "__pycache__" in f.parts:
+                continue
+            text = f.read_text()
+            for m in re.finditer(r'^import (\w+)|^from (\w+)', text, re.MULTILINE):
+                lib = m.group(1) or m.group(2)
+                if lib in time_libs:
+                    project_time_lib = lib
+                    break
+            if project_time_lib:
                 break
-        if project_time_lib:
-            break
-    if not project_time_lib:
-        project_time_lib = "pendulum"  # default fallback
-    generated_files = list(target.rglob("*.py")) if target.is_dir() else []
-    for f in generated_files:
-        if f.name.startswith("__"):
-            continue
-        text = f.read_text()
-        for m in re.finditer(r'^import (\w+)|^from (\w+)', text, re.MULTILINE):
-            lib = m.group(1) or m.group(2)
-            if lib in time_libs and lib != project_time_lib:
-                issues.append(f"{f.name}: use project time library ({project_time_lib}) instead of {lib}")
+        if not project_time_lib:
+            project_time_lib = "pendulum"  # default fallback
+        generated_files = list(target.rglob("*.py")) if target.is_dir() else []
+        for f in generated_files:
+            if f.name.startswith("__"):
+                continue
+            text = f.read_text()
+            for m in re.finditer(r'^import (\w+)|^from (\w+)', text, re.MULTILINE):
+                lib = m.group(1) or m.group(2)
+                if lib in time_libs and lib != project_time_lib:
+                    issues.append(f"{f.name}: use project time library ({project_time_lib}) instead of {lib}")
 
-    # 6. logging.getLogger — checked in validate_code_standards (per-file)
-    # 7. Zero comments — checked in validate_code_standards (per-file)
-    # 8. No secrets — grep for common secret patterns in generated code
-    # Exclude test files (fixture data is legitimate)
-    secret_patterns = [
-        (r'(?i)(password|secret|token|api_key|api_secret)\s*[=:]\s*["\'][^"\']+["\']', "hardcoded secret"),
-        (r'(?i)(access_token|auth_token)\s*=\s*["\'][^"\']{8,}["\']', "hardcoded auth token"),
-    ]
-    for f in generated_files:
-        if f.name.startswith("__") or f.suffix != ".py" or f.name == "Tests.py":
-            continue
-        text = f.read_text()
-        for pat, label in secret_patterns:
-            for m in re.finditer(pat, text):
-                line_num = text[:m.start()].count("\n") + 1
-                issues.append(f"{f.name}:{line_num} potential {label}")
+        # 8. No secrets — grep for common secret patterns in generated code
+        secret_patterns = [
+            (r'(?i)(password|secret|token|api_key|api_secret)\s*[=:]\s*["\'][^"\']+["\']', "hardcoded secret"),
+            (r'(?i)(access_token|auth_token)\s*=\s*["\'][^"\']{8,}["\']', "hardcoded auth token"),
+        ]
+        for f in generated_files:
+            if f.name.startswith("__") or f.suffix != ".py" or f.name == "Tests.py":
+                continue
+            text = f.read_text()
+            for pat, label in secret_patterns:
+                for m in re.finditer(pat, text):
+                    line_num = text[:m.start()].count("\n") + 1
+                    issues.append(f"{f.name}:{line_num} potential {label}")
 
-    # 9. No emojis — checked in validate_code_standards (per-line)
-    # 10. Unit tests — checked in validate_code_structure (Tests.py)
-    # 11. Type annotations — checked in validate_code_standards (return types)
+    elif stack in ("typescript", "javascript"):
+        pkg_json = repo_root / "package.json"
+        if not pkg_json.exists():
+            issues.append("Missing package.json")
+
+        code_suffixes = {".ts", ".js", ".tsx", ".jsx"}
+        generated_files = [f for f in target.rglob("*") if f.is_file() and f.suffix in code_suffixes] if target.is_dir() else []
+        secret_patterns = [
+            (r'(?i)(password|secret|token|api_key|api_secret)\s*[=:]\s*["\'][^"\']+["\']', "hardcoded secret"),
+            (r'(?i)(access_token|auth_token)\s*=\s*["\'][^"\']{8,}["\']', "hardcoded auth token"),
+        ]
+        for f in generated_files:
+            if "test" in f.name.lower() or f.name.startswith("Tests."):
+                continue
+            text = f.read_text()
+            for pat, label in secret_patterns:
+                for m in re.finditer(pat, text):
+                    line_num = text[:m.start()].count("\n") + 1
+                    issues.append(f"{f.name}:{line_num} potential {label}")
 
     return issues
 
@@ -478,12 +495,13 @@ def truncated_files(written: list[Path]) -> list[str]:
         if last_char in "([{," or content.endswith("Optional["):
             truncated.append(p.name)
             continue
-        lines = content.splitlines()
-        for line in lines:
-            s = line.strip()
-            if re.match(r'^\w+\s*=\s*$', s):
-                truncated.append(p.name)
-                break
+        if p.suffix in {".py", ".ts", ".js", ".tsx", ".jsx"}:
+            lines = content.splitlines()
+            for line in lines:
+                s = line.strip()
+                if re.match(r'^\w+\s*=\s*$', s):
+                    truncated.append(p.name)
+                    break
     return truncated
 
 
@@ -508,8 +526,9 @@ def extract_json_blocks(text: str) -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
     result: dict[str, str] = {}
+    valid_suffixes = (".py", ".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs", ".json", ".md", ".html", ".sql")
     for k, v in data.items():
-        if isinstance(k, str) and isinstance(v, str) and k.endswith(".py"):
+        if isinstance(k, str) and isinstance(v, str) and (any(k.endswith(sfx) for sfx in valid_suffixes) or "." in k):
             result[k] = v
     return result
 
@@ -533,40 +552,223 @@ def run_pytest(test_path: Path) -> tuple[bool, str]:
     return passed, output
 
 
+def run_tests(test_path: Path, test_command: str = "", stack: str = "python") -> tuple[bool, str]:
+    if test_command:
+        formatted_cmd = test_command.replace("{test_path}", str(test_path)).replace("{repo_root}", str(REPO_ROOT))
+        import shlex
+        cmd = shlex.split(formatted_cmd)
+        env = os.environ.copy()
+        with subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, cwd=str(REPO_ROOT), env=env,
+        ) as proc:
+            if proc.stdout is None:
+                return False, ""
+            output = ""
+            for line in proc.stdout:
+                print(line, end="", file=sys.stderr)
+                output += line
+        passed = proc.returncode == 0
+        return passed, output
+
+    if stack == "python":
+        return run_pytest(test_path)
+
+    # For typescript / javascript
+    pkg_json = REPO_ROOT / "package.json"
+    cmd = ["npm", "test", "--", str(test_path)]
+    if not pkg_json.exists():
+        if test_path.suffix == ".js":
+            cmd = ["node", "--test", str(test_path)]
+        else:
+            cmd = ["npx", "tsx", "--test", str(test_path)]
+
+    env = os.environ.copy()
+    try:
+        with subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, cwd=str(REPO_ROOT), env=env,
+        ) as proc:
+            if proc.stdout is None:
+                return False, ""
+            output = ""
+            for line in proc.stdout:
+                print(line, end="", file=sys.stderr)
+                output += line
+        passed = proc.returncode == 0
+        return passed, output
+    except FileNotFoundError as e:
+        return False, f"Test runner execution failed: {e}"
+
+
+def find_test_files(target: Path, expected: set[str] | None = None) -> list[Path]:
+    test_names = ["Tests.py", "Tests.ts", "Tests.js"]
+    found = [target / f for f in test_names if (target / f).exists()]
+    if not found and expected:
+        for f in expected:
+            if "test" in f.lower() and (target / f).exists():
+                found.append(target / f)
+    return found
+
+
 def verify_target_files(
     target: Path,
     repo_root: Path,
     expected: set[str],
+    stack: str = "python",
+    test_command: str = "",
 ) -> tuple[bool, str]:
-    """Run static validation and pytest on current files on disk."""
-    disk_files = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
+    """Run static validation and tests on current files on disk."""
+    code_suffixes = {".py", ".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs", ".html", ".sql"}
+    disk_files = {p.name for p in target.iterdir() if p.is_file() and (p.suffix in code_suffixes or p.name in expected)}
     missing = expected - disk_files
     if missing:
         return False, f"Missing canonical files: {missing}."
 
-    all_py = [p for p in target.iterdir() if p.is_file() and p.suffix == ".py" and not p.name.startswith("__")]
-    bad = truncated_files(all_py)
+    all_code = [p for p in target.iterdir() if p.is_file() and p.suffix in code_suffixes and not p.name.startswith("__")]
+    bad = truncated_files(all_code)
     if bad:
         return False, f"Files appear truncated: {bad}."
 
     struct_issues: list[str] = []
-    for w in all_py:
+    for w in all_code:
         struct_issues.extend(validate_code_structure(w.read_text(), w.name))
-    std_violations = validate_code_standards(all_py)
-    const_violations = validate_constitution(repo_root, target)
+    std_violations = validate_code_standards(all_code)
+    const_violations = validate_constitution(repo_root, target, stack=stack)
     pep8_violations = validate_pep8(repo_root, target)
     all_violations = struct_issues + std_violations + const_violations + pep8_violations
     if all_violations:
         return False, "Violations:\n  " + "\n  ".join(all_violations)
 
-    test_file = target / "Tests.py"
-    if test_file.exists():
-        passed, test_output = run_pytest(test_file)
+    test_files = find_test_files(target, expected)
+    for test_file in test_files:
+        passed, test_output = run_tests(test_file, test_command=test_command, stack=stack)
         if not passed:
             failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
-            return False, f"Pytest verification failed:\n{failure_summary.strip()}"
+            err_label = "Pytest verification failed" if stack == "python" else "Test verification failed"
+            return False, f"{err_label}:\n{failure_summary.strip()}"
 
     return True, ""
+
+
+
+def audit_and_enrich_tests(
+    target: Path,
+    stack: str = "python",
+    max_attempts: int = 0,
+    tester_persona: str | None = None,
+    expected: set[str] | frozenset[str] | list[str] | None = None,
+) -> bool:
+    """Audit and enrich the feature's test file with adversarial cases via the Tester persona."""
+    test_files = find_test_files(target, expected)
+    if not test_files:
+        return False
+    test_file = test_files[0]
+    spec_path = target / "spec.md"
+    if not spec_path.exists():
+        return False
+
+    spec_content = spec_path.read_text()
+    original_test_code = test_file.read_text()
+    if not original_test_code.strip():
+        return False
+
+    if tester_persona is None:
+        try:
+            tester_persona = load_persona("tester")
+        except Exception:
+            tester_persona = ""
+        if not tester_persona:
+            p_path = Path(__file__).resolve().parent / "personas" / "tester_agent.md"
+            if p_path.exists():
+                tester_persona = p_path.read_text()
+            else:
+                tester_persona = (
+                    "You are an adversarial QA & Test Sub-Agent. Audit the feature's test file against "
+                    "the contract in spec.md, enriching it with adversarial, boundary, and edge-case tests. "
+                    "Output the COMPLETE updated test file code."
+                )
+
+    target_files = collect_target_files(target, expected)
+    prompt_parts = [
+        f"## Target Directory\n{target}\n",
+        f"## Specification (spec.md)\n{spec_content}\n",
+        "## Current Implementation Files\n",
+    ]
+    for fname, fcontent in target_files.items():
+        if fname not in {"spec.md", test_file.name}:
+            prompt_parts.append(f"### {fname}\n{fcontent}\n")
+
+    prompt_parts.append(f"## Current Test Suite ({test_file.name})\n```\n{original_test_code}\n```\n")
+    prompt_parts.append(
+        f"## Task for Tester Subagent\n"
+        f"Audit {test_file.name} against spec.md and the implementation files above.\n"
+        f"1. Contract Invariants: Ensure every item in '## Business Logic Constraints' has explicit test coverage.\n"
+        f"2. Error Cases: Ensure every condition in the '## Error Cases' table has a negative test asserting expected error/status.\n"
+        f"3. Boundary & Edge Conditions: Inject edge-case inputs (empty, boundary lengths, negative/zero numbers, unexpected nulls).\n"
+        f"4. Data Isolation: Verify setup, isolation, and teardown.\n"
+        f"5. Retain ALL existing valid test cases and append new adversarial test methods.\n"
+        f"6. Adhere strictly to code standards (type annotations, PEP 484, zero '#' comments in Python, no emojis).\n"
+        f"7. Return the COMPLETE updated {test_file.name} file in a single ``` block or with ### {test_file.name}.\n"
+    )
+    prompt = "\n".join(prompt_parts)
+
+    response = _complete(prompt, persona=tester_persona, max_attempts=max_attempts, task="tester_agent")
+    if not response:
+        print(f"[Runner] Tester subagent returned empty response; keeping existing {test_file.name}.", file=sys.stderr)
+        return False
+
+    extracted = extract_code_blocks(response)
+    new_code = ""
+    if test_file.name in extracted:
+        new_code = extracted[test_file.name]
+    else:
+        for k, v in extracted.items():
+            if Path(k).name == test_file.name:
+                new_code = v
+                break
+
+    if not new_code:
+        m = re.search(r"```(?:python|py|ts|typescript|js|javascript)?\n(.*?)```", response, re.DOTALL)
+        if m:
+            new_code = m.group(1).strip()
+        elif "def test_" in response or "import " in response or "describe(" in response:
+            new_code = response.strip()
+
+    if not new_code:
+        print(f"[Runner] Could not extract test code from Tester subagent response; keeping existing {test_file.name}.", file=sys.stderr)
+        return False
+
+    blocks = parse_search_replace_blocks(new_code)
+    if blocks:
+        patched, applied, _ = apply_search_replace_blocks(original_test_code, new_code)
+        if applied:
+            new_code = patched
+
+    if len(new_code.strip()) < len(original_test_code.strip()) // 2:
+        print(f"[Runner] Tester subagent returned truncated or incomplete test code; keeping existing {test_file.name}.", file=sys.stderr)
+        return False
+
+    struct_issues = validate_code_structure(new_code, test_file.name)
+    if struct_issues:
+        print(f"[Runner] Tester subagent produced structural violations: {struct_issues}; keeping existing {test_file.name}.", file=sys.stderr)
+        return False
+
+    write_file(test_file, new_code + ("\n" if not new_code.endswith("\n") else ""))
+    bad = truncated_files([test_file])
+    std_issues = validate_code_standards([test_file])
+    if bad or std_issues:
+        record_model_experience(get_last_model(), "tester_structure", success=False)
+        reasons = bad or std_issues
+        print(f"[Runner] Tester subagent output failed QA gates: {reasons}; restoring original {test_file.name}.", file=sys.stderr)
+        write_file(test_file, original_test_code)
+        return False
+    record_model_experience(get_last_model(), "tester_structure", success=True)
+
+    print(f"[Runner] Tester subagent successfully audited and enriched {test_file.name} with adversarial tests.")
+    return True
 
 
 def handle_interactive_fallback(
@@ -621,6 +823,9 @@ def auto_backend(
     expected: set[str] | frozenset[str] | list[str] | None = None,
     interactive: bool = True,
     stdin_fn: Callable[[str], str] | None = None,
+    stack: str = "python",
+    test_command: str = "",
+    no_tester: bool = False,
 ) -> bool:
     if expected is not None:
         expected_set = set(expected)
@@ -629,11 +834,13 @@ def auto_backend(
     if no_controller:
         expected_set.discard("Controller.py")
     expected = expected_set
-    pre_existing = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
+    code_suffixes = {".py", ".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs", ".html", ".sql"}
+    pre_existing = {p.name for p in target.iterdir() if p.is_file() and (p.suffix in code_suffixes or p.name in expected_set)}
     protected_extra = pre_existing - expected
     known_files = set(pre_existing)
     t_total = time.time()
 
+    tests_audited = False
     last_error: str = ""
     written: list[Path] = []
     attempt = 0
@@ -643,9 +850,9 @@ def auto_backend(
         t_attempt = time.time()
         print(f"[Runner] LLM attempt {attempt}...")
         if last_error:
-            response = call_llm(build_retry_prompt(target, last_error), persona=persona, max_attempts=max_attempts)
+            response = call_llm(build_retry_prompt(target, last_error), persona=persona, max_attempts=max_attempts, task="backend_agent")
         else:
-            response = call_llm(prompt, persona=persona, max_attempts=max_attempts)
+            response = call_llm(prompt, persona=persona, max_attempts=max_attempts, task="backend_agent")
         files = extract_code_blocks(response)
         has_failed = False
         if files:
@@ -664,7 +871,7 @@ def auto_backend(
                 print(f"[Runner] {last_error} Retrying...", file=sys.stderr)
                 has_failed = True
         else:
-            written = [p for p in target.iterdir() if p.suffix == ".py" and p.name in (expected | known_files)]
+            written = [p for p in target.iterdir() if (p.suffix in code_suffixes or p.name in expected) and p.name in (expected | known_files)]
             files = {p.name: p.read_text() for p in written}
             if not written:
                 last_error = "No code blocks found in LLM response and no files written to the target directory."
@@ -688,15 +895,16 @@ def auto_backend(
             for w in written:
                 struct_issues.extend(validate_code_structure(w.read_text(), w.name))
             std_violations = validate_code_standards(written)
-            const_violations = validate_constitution(REPO_ROOT, target)
+            const_violations = validate_constitution(REPO_ROOT, target, stack=stack)
             pep8_violations = validate_pep8(REPO_ROOT, target)
             all_violations = struct_issues + std_violations + const_violations + pep8_violations
             t_elapsed = time.time() - t_attempt
             if all_violations:
+                record_model_experience(get_last_model(), "backend_structure", success=False)
                 last_error = "Violations:\n  " + "\n  ".join(all_violations)
                 print(f"[Runner] {last_error}", file=sys.stderr)
 
-            disk_files = {p.name for p in target.iterdir() if p.is_file() and p.suffix == ".py"}
+            disk_files = {p.name for p in target.iterdir() if p.is_file() and (p.suffix in code_suffixes or p.name in expected)}
             missing = expected - disk_files
             if missing:
                 last_error = f"Missing canonical files: {missing}. Must include ALL {len(expected)} canonical files."
@@ -707,23 +915,38 @@ def auto_backend(
                 has_failed = True
 
         if not has_failed:
-            test_file = target / "Tests.py"
-            if not test_file.exists():
+            if not no_tester and not tests_audited:
+                test_files = find_test_files(target, expected)
+                if test_files:
+                    print(f"[Runner] Invoking Tester subagent to audit and enrich {test_files[0].name}...")
+                    audit_ok = audit_and_enrich_tests(target, stack=stack, max_attempts=max_attempts, expected=expected)
+                    tests_audited = True
+
+            test_files = find_test_files(target, expected)
+            if not test_files:
                 last_error = ""
-                print(f"[Runner] Attempt {attempt} OK (no Tests.py found) ({time.time() - t_attempt:.1f}s)")
+                print(f"[Runner] Attempt {attempt} OK (no test files found) ({time.time() - t_attempt:.1f}s)")
                 break
 
-            print(f"[Runner] Running tests for {target.name} (attempt {attempt})...")
-            passed, test_output = run_pytest(test_file)
-            if not passed:
-                failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
-                last_error = f"Pytest verification failed:\n{failure_summary.strip()}"
-                print(f"[Runner] Tests failed on attempt {attempt}. Retrying with error feedback...", file=sys.stderr)
-                has_failed = True
-            else:
+            all_passed = True
+            for test_file in test_files:
+                print(f"[Runner] Running tests ({test_file.name}) for {target.name} (attempt {attempt})...")
+                passed, test_output = run_tests(test_file, test_command=test_command, stack=stack)
+                if not passed:
+                    failure_summary = test_output[-1500:] if len(test_output) > 1500 else test_output
+                    err_label = "Pytest verification failed" if stack == "python" else "Test verification failed"
+                    last_error = f"{err_label}:\n{failure_summary.strip()}"
+                    print(f"[Runner] Tests failed on attempt {attempt}. Retrying with error feedback...", file=sys.stderr)
+                    has_failed = True
+                    all_passed = False
+                    break
+            if all_passed:
+                record_model_experience(get_last_model(), "backend_logic", success=True)
                 last_error = ""
                 print(f"[Runner] Attempt {attempt} OK & All Tests Passed ({time.time() - t_attempt:.1f}s)")
                 break
+            else:
+                record_model_experience(get_last_model(), "backend_logic", success=False)
 
         if attempt >= max_auto_attempts:
             is_interactive = interactive and (sys.stdin.isatty() or stdin_fn is not None)
@@ -739,7 +962,7 @@ def auto_backend(
                     break
                 elif action == "verify":
                     print(f"[Runner] Re-verifying {target.name} after manual edits...")
-                    v_ok, v_err = verify_target_files(target, REPO_ROOT, expected)
+                    v_ok, v_err = verify_target_files(target, REPO_ROOT, expected, stack=stack, test_command=test_command)
                     if v_ok:
                         print(f"[Runner] Manual verification PASSED ({time.time() - t_total:.1f}s total)")
                         has_failed = False
@@ -779,8 +1002,11 @@ def run() -> None:
     parser.add_argument("--max-attempts", type=int, default=0, help="Maximum LLM model-chain attempts; 0 = try every discovered free model (default: 0)")
     parser.add_argument("--no-controller", action="store_true", help="Skip Controller.py requirement")
     parser.add_argument("--no-auxiliary", action="store_true", help="Disallow auxiliary non-canonical .py files")
+    parser.add_argument("--no-tester", action="store_true", help="Skip Tester subagent audit of Tests.py")
     parser.add_argument("--no-interactive", action="store_true", help="Disable interactive fallback on attempt exhaustion")
     parser.add_argument("--canonical", help="Comma-separated list of expected canonical files (e.g. Schema.py,Handler.py,Tests.py)")
+    parser.add_argument("--stack", default="python", help="Project stack (python, typescript, javascript)")
+    parser.add_argument("--test-command", default="", help="Custom command to run tests")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full prompt and response to stderr")
     args = parser.parse_args()
     if args.verbose:
@@ -842,6 +1068,9 @@ def run() -> None:
         allow_auxiliary=not args.no_auxiliary,
         expected=expected_files,
         interactive=not args.no_interactive,
+        stack=args.stack,
+        test_command=args.test_command,
+        no_tester=args.no_tester,
     )
     if not ok:
         sys.exit(1)

@@ -1,9 +1,13 @@
+import json
 import subprocess
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from . import rules
-from .config import REPO_ROOT
+from .config import AGENTS_DIR, PERSONAS_DIR, REPO_ROOT
 from .feature import (
     FeatureTarget,
     ModifyResolution,
@@ -74,7 +78,7 @@ def _parse_request(request: str) -> tuple[str, str, str, str]:
     return prefix, domain, action, rest
 
 
-_HELP_TEXT = """Usage:  ./.agents/orch.py <action> <domain/Feature> [inline prompt]
+_HELP_TEXT = """Usage:  ./.agents/orch.py <action> <domain/Feature> [inline prompt] [flags]
 
 Prompt commands (expect an inline prompt):
   init     <path>/<project-name>           create new project
@@ -92,10 +96,21 @@ Other:
   scan                                   discover existing features
   qa                                     run feature tests + code-standards audit (no LLM)
 
+Optional Flags:
+  -p, --prompt <file>                    File containing multi-sentence prompt
+  -m, --model <id>                       Override API model for this run
+  --max-attempts <n>                     Cap on LLM attempts (default: 0)
+  --no-controller                        Skip Controller.py generation
+  --no-tester                            Skip adversarial Tester subagent audit of Tests.py
+  -a, --app <app>                        App context (e.g. private)
+  -s, --stack <stack>                    Project stack (python, typescript, javascript)
+  --db <engine>                          Database engine for full-stack slices (sqlite, duckdb, postgres)
+  --ui <type>                            UI template for full-stack slices (vue, plain)
+
 Examples:
-  ./.agents/orch.py new Payments "auction payment wallet flow"
+  ./.agents/orch.py new Payments "auction payment wallet flow" --db postgres --ui vue
   ./.agents/orch.py modify shared/Payment "share screenshot separately"
-  ./.agents/orch.py do Payment
+  ./.agents/orch.py do Payment --no-tester
   ./.agents/orch.py qa
 """
 
@@ -112,7 +127,7 @@ def _prompt_required_result(prefix: str, name: str) -> CommandResult:
     return CommandResult(success=False)
 
 
-def _cmd_init(domain: str, action: str, rest: str, prompt_content: str) -> CommandResult:
+def _cmd_init(domain: str, action: str, rest: str, prompt_content: str, stack: str = "", db: str = "", ui: str = "") -> CommandResult:
     # The prompt argument is ignored: init only creates the folder + .agents symlink.
     if not action:
         print("[Orchestrator] init requires a project target: init <path>/<project-name>")
@@ -124,7 +139,19 @@ def _cmd_init(domain: str, action: str, rest: str, prompt_content: str) -> Comma
     else:
         print("[Orchestrator] init requires a project target: init <path>/<project-name>")
         return CommandResult(success=False)
-    if init_new_project(project_dir):
+    if rest:
+        rest_parts = rest.split()
+        for i, part in enumerate(rest_parts):
+            if part in ("--stack", "-s") and i + 1 < len(rest_parts):
+                stack = rest_parts[i + 1]
+            elif part.lower() in ("python", "typescript", "javascript"):
+                stack = part.lower()
+            elif part == "--db" and i + 1 < len(rest_parts):
+                db = rest_parts[i + 1]
+            elif part == "--ui" and i + 1 < len(rest_parts):
+                ui = rest_parts[i + 1]
+    stack = stack or "python"
+    if init_new_project(project_dir, stack=stack, db=db, ui=ui):
         return CommandResult(next_action=f'cd {project_dir} && ./.agents/orch.py new <domain/Feature> "prompt"')
     return CommandResult(success=False)
 
@@ -272,7 +299,7 @@ def _cmd_feature(target: FeatureTarget, rest: str, prompt_content: str, no_contr
     return CommandResult(success=False)
 
 
-def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> CommandResult:
+def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0, no_controller: bool = False, no_tester: bool = False) -> CommandResult:
     if not raw:
         print("[Orchestrator] No feature name given and cannot infer from current branch.")
         return CommandResult(next_action='checkout or create a feature branch first — new <domain/Feature> "prompt"')
@@ -309,13 +336,18 @@ def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> Co
         canonical = getattr(target, "canonical_files", None)
         has_controller = "Controller.py" in (canonical or ("Schema.py", "Handler.py", "Controller.py", "Tests.py"))
 
+    stack = getattr(target, "stack", "python") or "python"
+    test_command = getattr(target, "test_command", "") or ""
     ok = run_runner(
         "backend",
         feature_dir,
         task,
         max_attempts=max_attempts,
-        no_controller=not has_controller,
+        no_controller=not has_controller or no_controller,
+        no_tester=no_tester,
         canonical_files=canonical,
+        stack=stack,
+        test_command=test_command,
     )
     if ok:
         register_target(target)
@@ -351,7 +383,153 @@ def _cmd_do(target: FeatureTarget | None, raw: str, max_attempts: int = 0) -> Co
     return CommandResult(success=False, next_action="fix the failing tests above, then run do again — or undo to discard this branch")
 
 
-def _cmd_modify(res: ModifyResolution | None, raw: str, rest: str, prompt_content: str, implicit: bool) -> CommandResult:
+
+
+def record_orchestrator_rule(
+    cat_choice: str,
+    rule_text: str,
+    agents_dir: Path | None = None,
+    _input: Callable[[str], str] | None = None,
+) -> bool:
+    agents_dir = agents_dir or AGENTS_DIR
+    personas_dir = agents_dir / "personas"
+    rules_dir = agents_dir / "rules"
+
+    if cat_choice == "1":
+        target_file = personas_dir / "backend_agent.md"
+        if not target_file.exists():
+            print(f"[Orchestrator] Target file not found: {target_file}")
+            return False
+        content = target_file.read_text()
+        section_hdr = "## Learned Rules & Project Constraints"
+        if section_hdr not in content:
+            new_content = content.rstrip() + f"\n\n{section_hdr}\n- {rule_text}\n"
+        else:
+            new_content = content.rstrip() + f"\n- {rule_text}\n"
+        target_file.write_text(new_content)
+        print(f"[Orchestrator] Successfully appended rule to {target_file}")
+        return True
+
+    elif cat_choice == "2":
+        target_file = personas_dir / "tester_agent.md"
+        if not target_file.exists():
+            print(f"[Orchestrator] Target file not found: {target_file}")
+            return False
+        content = target_file.read_text()
+        section_hdr = "## Learned Testing Constraints"
+        if section_hdr not in content:
+            new_content = content.rstrip() + f"\n\n{section_hdr}\n- {rule_text}\n"
+        else:
+            new_content = content.rstrip() + f"\n- {rule_text}\n"
+        target_file.write_text(new_content)
+        print(f"[Orchestrator] Successfully appended rule to {target_file}")
+        return True
+
+    elif cat_choice == "3":
+        inp = _input if _input is not None else input
+        try:
+            lang = inp("Rule language (python, jinja, sql, vue, ts) [default: python]: ").strip().lower() or "python"
+        except (EOFError, KeyboardInterrupt):
+            lang = "python"
+        target_file = rules_dir / f"{lang}.json"
+        if not target_file.exists():
+            print(f"[Orchestrator] Rules file not found: {target_file}")
+            return False
+
+        try:
+            pattern = inp("Optional regex pattern for automated rule enforcement (press Enter to skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            pattern = ""
+
+        try:
+            rules_data = json.loads(target_file.read_text())
+        except Exception as e:
+            print(f"[Orchestrator] Failed to parse {target_file}: {e}")
+            return False
+
+        if pattern:
+            rule_id = f"rule-{int(time.time())}"
+            new_check = {
+                "id": rule_id,
+                "group": "standards",
+                "kind": "line",
+                "pattern": pattern,
+                "message": rule_text,
+            }
+            rules_data.setdefault("checks", []).append(new_check)
+            target_file.write_text(json.dumps(rules_data, indent=2) + "\n")
+            print(f"[Orchestrator] Added automated check '{rule_id}' to {target_file}")
+            return True
+        else:
+            target_persona = personas_dir / "backend_agent.md"
+            content = target_persona.read_text()
+            section_hdr = f"## Learned {lang.capitalize()} Constraints"
+            if section_hdr not in content:
+                new_content = content.rstrip() + f"\n\n{section_hdr}\n- {rule_text}\n"
+            else:
+                new_content = content.rstrip() + f"\n- {rule_text}\n"
+            target_persona.write_text(new_content)
+            print(f"[Orchestrator] No regex pattern provided; recorded as guideline in {target_persona}")
+            return True
+
+    elif cat_choice == "4":
+        agents_md = agents_dir.parent / "AGENTS.md" if agents_dir else REPO_ROOT / "AGENTS.md"
+        if not agents_md.exists():
+            agents_md = REPO_ROOT / "AGENTS.md"
+        if agents_md.exists():
+            content = agents_md.read_text()
+            section_hdr = "## Learned Orchestrator Rules"
+            if section_hdr not in content:
+                new_content = content.rstrip() + f"\n\n{section_hdr}\n- {rule_text}\n"
+            else:
+                new_content = content.rstrip() + f"\n- {rule_text}\n"
+            agents_md.write_text(new_content)
+            print(f"[Orchestrator] Successfully appended rule to {agents_md}")
+            return True
+        else:
+            print(f"[Orchestrator] AGENTS.md not found.")
+            return False
+
+    return False
+
+
+def prompt_capture_orchestrator_rule(stdin_fn: Callable[[str], str] | None = None) -> bool:
+    _input = stdin_fn if stdin_fn is not None else input
+    try:
+        ans = _input("\n[Orchestrator] Did this modification result from a missing or insufficient orchestrator rule? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if ans not in ("y", "yes"):
+        return False
+
+    print("\nCapture Global Orchestrator Rule")
+    print("Where should this rule be recorded?")
+    print("  1) Backend Persona Guideline (agents/personas/backend_agent.md)")
+    print("  2) Tester Persona Guideline (agents/personas/tester_agent.md)")
+    print("  3) Declarative Code Rule (agents/rules/<lang>.json)")
+    print("  4) General Orchestrator Documentation (AGENTS.md)")
+
+    try:
+        cat_choice = _input("Select target [1-4] (default 1): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if not cat_choice:
+        cat_choice = "1"
+
+    try:
+        rule_text = _input("Enter the rule / constraint to enforce: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if not rule_text:
+        print("[Orchestrator] Empty rule provided; skipped.")
+        return False
+
+    return record_orchestrator_rule(cat_choice, rule_text, _input=_input)
+
+def _cmd_modify(res: ModifyResolution | None, raw: str, rest: str, prompt_content: str, implicit: bool, stdin_fn: Callable[[str], str] | None = None) -> CommandResult:
     if res is None:
         print("[Orchestrator] No feature name given (modify expects a domain/Feature target, inline prompt, prompt file, or nvim context).")
         return CommandResult(next_action='pass a domain/Feature target with an inline prompt')
@@ -378,6 +556,8 @@ def _cmd_modify(res: ModifyResolution | None, raw: str, rest: str, prompt_conten
         branch_prefix="modify",
         feature_name=res.name,
     )
+    if sys.stdin.isatty() or stdin_fn is not None:
+        prompt_capture_orchestrator_rule(stdin_fn=stdin_fn)
     return CommandResult(next_action=f'./.agents/orch.py do {res.name} to implement the amended spec')
 
 
@@ -543,7 +723,18 @@ def _resolve_delete(project: ProjectFeatures, action: str, rest: str, app: str) 
         return None, ""
     return project.resolve(raw, app=app), raw
 
-def dispatch(request: str, prompt_content: str = "", no_controller: bool = False, app: str = "", max_attempts: int = 0) -> CommandResult:
+def dispatch(
+    request: str,
+    prompt_content: str = "",
+    no_controller: bool = False,
+    no_tester: bool = False,
+    app: str = "",
+    max_attempts: int = 0,
+    stack: str = "",
+    db: str = "",
+    ui: str = "",
+    stdin_fn: Any = None,
+) -> CommandResult:
 
     prefix, domain, action, rest = _parse_request(request)
     project = load_project(REPO_ROOT)
@@ -558,7 +749,7 @@ def dispatch(request: str, prompt_content: str = "", no_controller: bool = False
         return CommandResult(success=False)
 
     if prefix == "init":
-        return _cmd_init(domain, action, rest, prompt_content)
+        return _cmd_init(domain, action, rest, prompt_content, stack=stack, db=db, ui=ui)
 
     display_prefix = "feature"
     if prefix == "new":
@@ -575,12 +766,12 @@ def dispatch(request: str, prompt_content: str = "", no_controller: bool = False
         return _cmd_qa(project)
 
     if prefix == "feature":
-        feature_target = project.target_for_new(action, domain, app)
+        feature_target = project.target_for_new(action, domain, app, db=db, ui=ui)
         return _cmd_feature(feature_target, rest, prompt_content, no_controller, display_prefix)
 
     if prefix == "do":
         target, raw = _resolve_do(project, action, rest, app)
-        return _cmd_do(target, raw, max_attempts=max_attempts)
+        return _cmd_do(target, raw, max_attempts=max_attempts, no_controller=no_controller, no_tester=no_tester)
 
     if prefix == "modify":
         implicit = not action
@@ -588,7 +779,7 @@ def dispatch(request: str, prompt_content: str = "", no_controller: bool = False
         if implicit:
             raw = resolve_current_file() or ""
         res = project.resolve_modify(raw, app=app, implicit=implicit) if raw else None
-        return _cmd_modify(res, raw, rest, prompt_content, implicit)
+        return _cmd_modify(res, raw, rest, prompt_content, implicit, stdin_fn=stdin_fn)
 
     if prefix == "delete":
         target, raw = _resolve_delete(project, action, rest, app)

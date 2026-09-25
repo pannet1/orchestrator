@@ -37,6 +37,10 @@ class FeatureTarget:
     config_path: Path
     app: str = ""
     canonical_files: frozenset[str] = frozenset({"Schema.py", "Handler.py", "Controller.py", "Tests.py"})
+    stack: str = "python"
+    test_command: str = ""
+    db: str = ""
+    ui: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,10 @@ class ProjectFeatures:
     repo_root: Path
     config_path: Path
     features_root: Path
+    stack: str = "python"
+    test_command: str = ""
+    db: str = ""
+    ui: str = ""
     apps: dict[str, AppConfig] = field(default_factory=dict)
     known_features: dict[str, str] = field(default_factory=dict)
     domain_keywords: dict[str, tuple[str, str]] = field(default_factory=dict)
@@ -79,11 +87,27 @@ class ProjectFeatures:
         default_dir_name = str(cfg.get("features_dir", "features"))
         features_root = repo_root / default_dir_name
 
+        stack = str(cfg.get("stack", "")).lower()
+        if not stack:
+            if (repo_root / "tsconfig.json").exists():
+                stack = "typescript"
+            elif (repo_root / "package.json").exists() and not (repo_root / "pyproject.toml").exists():
+                stack = "javascript"
+            else:
+                stack = "python"
+
+        test_command = str(cfg.get("test_command", ""))
+
         canonical = cfg.get("canonical_files")
         if isinstance(canonical, (list, tuple)):
             canonical_files = tuple(str(x) for x in canonical)
         else:
-            canonical_files = ("Schema.py", "Handler.py", "Controller.py", "Tests.py")
+            if stack == "typescript":
+                canonical_files = ("Schema.ts", "Handler.ts", "Controller.ts", "Tests.ts")
+            elif stack == "javascript":
+                canonical_files = ("Schema.js", "Handler.js", "Controller.js", "Tests.js")
+            else:
+                canonical_files = ("Schema.py", "Handler.py", "Controller.py", "Tests.py")
 
         domain_canonical: dict[str, tuple[str, ...]] = {}
         domains_cfg = cfg.get("domains", {})
@@ -124,10 +148,17 @@ class ProjectFeatures:
                 if isinstance(v, (list, tuple)) and len(v) >= 2:
                     keywords[str(k)] = (str(v[0]), str(v[1]))
 
+        db = str(cfg.get("db", ""))
+        ui = str(cfg.get("ui", ""))
+
         return cls(
             repo_root=repo_root,
             config_path=config_path,
             features_root=features_root,
+            stack=stack,
+            test_command=test_command,
+            db=db,
+            ui=ui,
             apps=apps,
             known_features=known,
             domain_keywords=keywords,
@@ -184,10 +215,21 @@ class ProjectFeatures:
                 best, best_len = r, len(rr.parts)
         return best
 
-    def get_canonical_files(self, domain: str = "") -> frozenset[str]:
+    def get_canonical_files(self, domain: str = "", db: str = "", ui: str = "") -> frozenset[str]:
         if domain and domain in self.domain_canonical:
-            return frozenset(self.domain_canonical[domain])
-        return frozenset(self.canonical_files)
+            files = list(self.domain_canonical[domain])
+        else:
+            files = list(self.canonical_files)
+
+        eff_db = db or self.db
+        eff_ui = ui or self.ui
+
+        if eff_db and "schema.sql" not in files:
+            files.append("schema.sql")
+        if eff_ui and "view.html" not in files:
+            files.append("view.html")
+
+        return frozenset(files)
 
     def _target_for_dir(self, feature_dir: Path) -> FeatureTarget:
         root = self._root_of(feature_dir)
@@ -202,6 +244,10 @@ class ProjectFeatures:
             config_path=config,
             app=app,
             canonical_files=self.get_canonical_files(domain),
+            stack=self.stack,
+            test_command=self.test_command,
+            db=self.db,
+            ui=self.ui,
         )
 
     # -- resolution ----------------------------------------------------------
@@ -215,8 +261,10 @@ class ProjectFeatures:
                 return domain
         return ""
 
-    def target_for_new(self, name: str, domain: str = "", app: str = "") -> FeatureTarget:
+    def target_for_new(self, name: str, domain: str = "", app: str = "", db: str = "", ui: str = "") -> FeatureTarget:
         domain = domain or self.infer_domain(name) or "nodomain"
+        eff_db = db or self.db
+        eff_ui = ui or self.ui
         if app and app in self.apps:
             root, config = self.apps[app].features_dir, self.apps[app].config_path
         else:
@@ -228,7 +276,11 @@ class ProjectFeatures:
             root=root,
             config_path=config,
             app=app,
-            canonical_files=self.get_canonical_files(domain),
+            canonical_files=self.get_canonical_files(domain, db=eff_db, ui=eff_ui),
+            stack=self.stack,
+            test_command=self.test_command,
+            db=eff_db,
+            ui=eff_ui,
         )
 
     def resolve(self, raw: str, app: str = "") -> FeatureTarget | None:
@@ -451,7 +503,12 @@ class ProjectFeatures:
             for domain_dir in base_dir.iterdir():
                 if not domain_dir.is_dir() or domain_dir.name.startswith("_"):
                     continue
-                if (domain_dir / "Handler.py").exists():
+                is_slice = (
+                    (domain_dir / "Handler.py").exists()
+                    or (domain_dir / "spec.md").exists()
+                    or any(domain_dir.glob("Handler.*"))
+                )
+                if is_slice:
                     out.append(self._target_for_dir(domain_dir))
                     continue
                 for entry in domain_dir.iterdir():

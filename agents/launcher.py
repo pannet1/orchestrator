@@ -13,9 +13,18 @@ def run_runner(
     error_path: Path | None = None,
     max_attempts: int = 0,
     no_controller: bool = False,
+    no_tester: bool = False,
     canonical_files: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+    stack: str = "python",
+    test_command: str = "",
 ) -> bool:
     persona_path = PERSONAS_DIR / f"{persona_key}_agent.md"
+    if persona_key == "backend":
+        if stack == "typescript" and (PERSONAS_DIR / "backend_ts_agent.md").exists():
+            persona_path = PERSONAS_DIR / "backend_ts_agent.md"
+        elif stack == "javascript" and (PERSONAS_DIR / "backend_js_agent.md").exists():
+            persona_path = PERSONAS_DIR / "backend_js_agent.md"
+
     if not persona_path.exists():
         print(f"[Orchestrator] Persona not found: {persona_path}", file=sys.stderr)
         return False
@@ -27,9 +36,14 @@ def run_runner(
         "--task", task,
         "--api",
         "--max-attempts", str(max_attempts),
+        "--stack", stack,
     ]
+    if test_command:
+        cmd += ["--test-command", test_command]
     if no_controller:
         cmd.append("--no-controller")
+    if no_tester:
+        cmd.append("--no-tester")
     if canonical_files:
         cmd += ["--canonical", ",".join(sorted(canonical_files))]
     if error_path:

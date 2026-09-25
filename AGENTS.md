@@ -104,6 +104,9 @@ Global flags (parsed in `orch.py`):
 | `--app` / `-a <app>` | App context (e.g. `-a private` resolves against `features/` instead of `web/features/`). Auto-selected from the domain when the project defines `apps`. |
 | `--max-attempts <n>` | Cap on LLM attempts across the discovered free-model list before giving up (`0` = try every currently-available free model; default `0`). |
 | `--canonical <f1,f2,...>` | Override the expected canonical files for this run (e.g. `Schema.py,Worker.py,Tests.py`). |
+| `--stack` / `-s <name>` | Target project stack: `python` (default), `typescript`, or `javascript`. Sets scaffolding, rules (`ts.json`/`python.json`), and persona (`backend_ts_agent.md`, etc.). |
+| `--db <engine>` | Database engine (`sqlite`, `duckdb`, `postgres`) for vertical slice co-located `schema.sql` (idempotent DDL). |
+| `--ui <type>` | Frontend UI template type: `vue` (Jinja2 + Vue 3 with `[['[[']]` delimiters) or `plain` (Jinja2 + Plain JS). |
 
 **Flow per feature:** `new` → `do` → `merge`. `modify` slots in before `do`.
 `delete`/`undo` discard work. `qa` is a standalone audit.
@@ -243,5 +246,5 @@ This runs one suite: commands, feature, git, llm, templates, runner, rules.
 | `agents/runner.py` | Backend subprocess engine (never run by hand). |
 | `agents/model_chain.json` | Optional pinned free models (tried first). Live provider discovery is the source of truth. |
 | `agents/model_config.json` | `{"model": "..."}` persisted by `--model`. |
-| `agents/personas/*.md` | `backend_agent.md` (used by `do`), `spec_qa_agent.md` (loaded via `load_persona`). |
-| `agents/rules/python.json` | Declarative Python checks (line/text/ast/balanced kinds). |
+| `agents/personas/*.md` | Sub-agent personas (`backend_agent.md`, `backend_ts_agent.md`, `backend_js_agent.md`, `spec_qa_agent.md`). |
+| `agents/rules/*.json` | Declarative checks (`python.json`, `jinja.json`, `sql.json`, `vue.json`, `ts.json`). |
