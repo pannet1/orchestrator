@@ -25,6 +25,13 @@
       "message": "emoji found"
     },
     {
+      "id": "no-secrets",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "(?i)(password|secret|token|api_key|apikey)\\s*=\\s*[\u0027\u0022][^\u0027\u0022]{8,}[\u0027\u0022]",
+      "message": "potential hardcoded secret found (use environment variables)"
+    },
+    {
       "id": "no-flask-sqlalchemy",
       "group": "standards",
       "kind": "line",
