@@ -118,10 +118,13 @@ class TestLiveDiscovery:
         with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("subprocess.run", return_value=fake_result):
             free = free_model_ids(force=True)
-        # opencode (preferred) before openrouter
-        assert free.index("opencode/nemotron-3-ultra-free") < free.index("openrouter/cohere/north-mini-code:free")
+        # opencode (preferred) — openrouter excluded when disabled in pi config
+        # (pi's disabledProviders: openrouter, cline, huggingface)
+        opencode_models = [m for m in free if m.startswith("opencode/")]
+        assert len(opencode_models) > 0
+        # openrouter models are filtered out by disabledProviders
+        assert not any(m.startswith("openrouter/") for m in free)
         # local fallback always last
-                # non-free models excluded
         assert "opencode/claude-opus-4-5" not in free
 
     def test_free_model_ids_falls_back_when_discovery_empty(self) -> None:
@@ -140,7 +143,7 @@ class TestModelChain:
             yield
 
     def test_explicit_free_model_leads_chain(self) -> None:
-        chain = _model_chain("opencode/nemotron-3-ultra-free", 3)
+        chain = _model_chain("opencode/nemotron-3-ultra-free", 3, task="coding")
         assert chain[0] == "opencode/nemotron-3-ultra-free"
         assert len(chain) == 3
 
@@ -180,13 +183,16 @@ class TestLlmCompleteModelFallback:
             yield
 
     def test_failure_advances_to_next_model(self) -> None:
-        fake_popen, calls = _fake_popen({"openrouter/poolside/laguna-s-2.1:free": "actual content"})
+        fake_popen, calls = _fake_popen(
+            {"opencode/laguna-s-2.1-free": "actual content"}
+        )
         with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
-        assert result == "actual content"
+        assert len(calls) == 2
         assert calls[0] == "opencode/nemotron-3-ultra-free"
-        assert calls[1] != "opencode/nemotron-3-ultra-free"
+        assert calls[1] == "opencode/laguna-s-2.1-free"
+        assert result == "actual content"
 
     def test_empty_model_not_retried(self) -> None:
         fake_popen, calls = _fake_popen({})
@@ -194,11 +200,11 @@ class TestLlmCompleteModelFallback:
                 patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", model="opencode/nemotron-3-ultra-free", max_attempts=3)
         assert result is None
-        assert calls == ["opencode/nemotron-3-ultra-free", "openrouter/poolside/laguna-s-2.1:free", "openrouter/cohere/north-mini-code:free"]
+        assert calls == ["opencode/nemotron-3-ultra-free", "opencode/laguna-s-2.1-free", "openrouter/cohere/north-mini-code:free"]
 
     def test_auto_retry_breaks_inner_loop_and_advances(self) -> None:
         fake_popen, calls = _fake_popen(
-            {"openrouter/poolside/laguna-s-2.1:free": "recovered output"},
+            {"opencode/laguna-s-2.1-free": "recovered output"},
             error_models={"opencode/nemotron-3-ultra-free"},
         )
         with patch("agents.llm._pi_binary", return_value="pi"), \
@@ -223,16 +229,18 @@ class TestLlmCompleteModelFallback:
 
     def test_all_models_retried_once(self) -> None:
         """Every model in the chain gets exactly one attempt, never repeated."""
-        fake_popen, calls = _fake_popen({"opencode/laguna-s-2.1-free": "local fallback wins"})
+        expected_chain = _model_chain(default_model(), 0)
+        last_model = expected_chain[-1]
+        fake_popen, calls = _fake_popen({last_model: "local fallback wins"})
         with patch("agents.llm._pi_binary", return_value="pi"), \
                 patch("agents.llm.subprocess.Popen", fake_popen):
             result = llm_complete("prompt", system="sys", max_attempts=0)
         assert result == "local fallback wins"
-        assert calls[-1] == "opencode/laguna-s-2.1-free"
+        assert calls[-1] == last_model
         # No duplicates — each model tried exactly once
         assert len(calls) == len(set(calls)), f"Duplicate models in call sequence: {calls}"
-        # Full discovered chain (includes default_model if set)
-        assert set(calls) == set(_model_chain(default_model(), 0))
+        # Full discovered chain (includes default_model if set), excluding disabled providers
+        assert set(calls) == set(expected_chain)
 class TestDetectError:
     def test_detect_error_on_stderr_matches_rate_limit(self) -> None:
         from agents.llm import _detect_error
