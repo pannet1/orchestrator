@@ -189,12 +189,26 @@ def free_model_ids(force: bool = False) -> list[str]:
     Discovery is live, so newly rotated-in free models are picked up
     automatically and rotated-out ones are dropped. Falls back to
     DEFAULT_MODEL_CHAIN when discovery yields nothing.
+
+    Excludes disabled providers (cline, huggingface, etc.) so that
+    disabled providers from pi's config are always excluded from the
+    model chain, even if pi's own discovery lists them.
     """
     all_ids = query_provider_models(force=force)
     if not all_ids:
         return list(DEFAULT_MODEL_CHAIN)
 
-    free = [m for m in all_ids if _is_free(m)]
+    # Read pi's disabledProviders config to filter out unwanted providers
+    try:
+        import json
+        from pathlib import Path
+        settings = Path("/home/pannet1/.pi/agent/settings.json").read_text()
+        disp = tuple(json.loads(settings).get("disabledProviders", []))
+    except Exception:
+        disp = ()
+
+    free = [m for m in all_ids if _is_free(m)
+            and m.split("/")[0] not in disp]
 
     def sort_key(mid: str) -> tuple[int, int]:
         provider = mid.split("/", 1)[0]

@@ -6,7 +6,12 @@
       "group": "standards",
       "kind": "line",
       "pattern": "^\\s*//",
-      "exclude": ["@ts-ignore", "@ts-expect-error", "/// <reference", "#!"],
+      "exclude": [
+        "@ts-ignore",
+        "@ts-expect-error",
+        "/// <reference",
+        "#!"
+      ],
       "message": "comments not allowed"
     },
     {
@@ -31,26 +36,43 @@
       "message": "emoji found"
     },
     {
+      "id": "no-tempfile",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "['\"]/tmp/",
+      "message": "temporary test files should be created in data/ folder, not /tmp/"
+    },
+    {
       "id": "no-secrets",
       "group": "standards",
       "kind": "line",
-      "pattern": "(?i)(password|secret|token|api_key|apikey)\\s*=\\s*[\u0027\u0022][^\u0027\u0022]{8,}[\u0027\u0022]",
+      "pattern": "(?i)(password|secret|token|api_key|apikey)\\s*=\\s*['\"][^'\"]{8,}['\"]",
       "message": "potential hardcoded secret found (use environment variables)"
     },
     {
       "id": "handler-logger",
       "group": "structure",
       "kind": "text-required",
-      "only": ["Handler.ts", "Handler.js"],
-      "contains": ["logger"],
+      "only": [
+        "Handler.ts",
+        "Handler.js"
+      ],
+      "contains": [
+        "logger"
+      ],
       "message": "Handler must have a module-level logger"
     },
     {
       "id": "tests-presence",
       "group": "structure",
       "kind": "text-required",
-      "only": ["Tests.ts", "Tests.js"],
-      "contains": ["test"],
+      "only": [
+        "Tests.ts",
+        "Tests.js"
+      ],
+      "contains": [
+        "test"
+      ],
       "message": "Tests must contain test assertions"
     },
     {
@@ -58,9 +80,21 @@
       "group": "structure",
       "kind": "balanced",
       "pairs": [
-        {"open": "(", "close": ")", "message": "Unbalanced parentheses: {open} open vs {close} close"},
-        {"open": "{", "close": "}", "message": "Unbalanced braces: {open} open vs {close} close"},
-        {"open": "[", "close": "]", "message": "Unbalanced brackets: {open} open vs {close} close"}
+        {
+          "open": "(",
+          "close": ")",
+          "message": "Unbalanced parentheses: {open} open vs {close} close"
+        },
+        {
+          "open": "{",
+          "close": "}",
+          "message": "Unbalanced braces: {open} open vs {close} close"
+        },
+        {
+          "open": "[",
+          "close": "]",
+          "message": "Unbalanced brackets: {open} open vs {close} close"
+        }
       ]
     }
   ]

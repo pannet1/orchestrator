@@ -6,7 +6,11 @@
       "group": "standards",
       "kind": "line",
       "pattern": "^\\s*#",
-      "exclude": ["noqa", "# -*-", "#!/"],
+      "exclude": [
+        "noqa",
+        "# -*-",
+        "#!/"
+      ],
       "message": "comments not allowed"
     },
     {
@@ -14,7 +18,9 @@
       "group": "standards",
       "kind": "line",
       "pattern": "print\\(",
-      "exclude": ["logger"],
+      "exclude": [
+        "logger"
+      ],
       "message": "use shared logger, not print()"
     },
     {
@@ -28,15 +34,22 @@
       "id": "no-secrets",
       "group": "standards",
       "kind": "line",
-      "pattern": "(?i)(password|secret|token|api_key|apikey)\\s*=\\s*[\u0027\u0022][^\u0027\u0022]{8,}[\u0027\u0022]",
+      "pattern": "(?i)(password|secret|token|api_key|apikey)\\s*=\\s*['\"][^'\"]{8,}['\"]",
       "message": "potential hardcoded secret found (use environment variables)"
+    },
+    {
+      "id": "no-tempfile",
+      "group": "standards",
+      "kind": "line",
+      "pattern": "(import tempfile|from tempfile|[\\u0027\"]/tmp/)",
+      "message": "temporary test files should be created in data/ folder, not /tmp/ or using tempfile"
     },
     {
       "id": "no-flask-sqlalchemy",
       "group": "standards",
       "kind": "line",
       "pattern": "^(?:from\\s+(?:flask|sqlalchemy)\\s+import|import\\s+(?:flask|sqlalchemy))",
-      "message": "forbidden import — use FastAPI, not Flask/SQLAlchemy"
+      "message": "forbidden import \u2014 use FastAPI, not Flask/SQLAlchemy"
     },
     {
       "id": "no-logging-getlogger",
@@ -71,32 +84,54 @@
       "group": "standards",
       "kind": "py-ast",
       "check": "shared_logger_import",
-      "except": ["__init__.py", "Tests.py"],
-      "skip": {"name": ["Schema.py"], "contains": ["BaseModel"]},
+      "except": [
+        "__init__.py",
+        "Tests.py"
+      ],
+      "skip": {
+        "name": [
+          "Schema.py"
+        ],
+        "contains": [
+          "BaseModel"
+        ]
+      },
       "message": "missing shared logger import"
     },
     {
       "id": "schema-basemodel",
       "group": "structure",
       "kind": "text-required",
-      "only": ["Schema.py"],
-      "contains": ["BaseModel"],
+      "only": [
+        "Schema.py"
+      ],
+      "contains": [
+        "BaseModel"
+      ],
       "message": "Schema.py must import and use pydantic.BaseModel"
     },
     {
       "id": "handler-logger",
       "group": "structure",
       "kind": "text-required",
-      "only": ["Handler.py"],
-      "contains": ["logging_func"],
+      "only": [
+        "Handler.py"
+      ],
+      "contains": [
+        "logging_func"
+      ],
       "message": "Handler.py must have a module-level logger"
     },
     {
       "id": "tests-presence",
       "group": "structure",
       "kind": "text-required",
-      "only": ["Tests.py"],
-      "contains": ["def test_"],
+      "only": [
+        "Tests.py"
+      ],
+      "contains": [
+        "def test_"
+      ],
       "message": "Tests.py must contain test functions"
     },
     {
@@ -104,9 +139,21 @@
       "group": "structure",
       "kind": "balanced",
       "pairs": [
-        {"open": "(", "close": ")", "message": "Unbalanced parentheses: {open} open vs {close} close"},
-        {"token": "'''", "mode": "odd", "message": "Unbalanced triple-single-quotes"},
-        {"token": "\"\"\"", "mode": "odd", "message": "Unbalanced triple-double-quotes"}
+        {
+          "open": "(",
+          "close": ")",
+          "message": "Unbalanced parentheses: {open} open vs {close} close"
+        },
+        {
+          "token": "'''",
+          "mode": "odd",
+          "message": "Unbalanced triple-single-quotes"
+        },
+        {
+          "token": "\"\"\"",
+          "mode": "odd",
+          "message": "Unbalanced triple-double-quotes"
+        }
       ]
     }
   ]
